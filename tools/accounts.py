@@ -41,12 +41,17 @@ class Credentials:
     device: DeviceIdentity
 
 
-def load_env(path: Path = ENV_PATH) -> None:
+def load_env(path: Path | None = None) -> None:
     """Load ``KEY=VALUE`` pairs from a .env file into the environment.
 
     Existing environment variables win, so an explicit export still overrides
     the file. Deliberately minimal -- no interpolation, no export keyword.
+
+    ``path`` defaults to :data:`ENV_PATH` at call time rather than as a default
+    argument value, which would freeze it at import and make the location
+    impossible to redirect.
     """
+    path = path if path is not None else ENV_PATH
     if not path.is_file():
         return
     for raw_line in path.read_text().splitlines():
@@ -55,9 +60,22 @@ def load_env(path: Path = ENV_PATH) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = _unquote(value.strip())
         if key and value and key not in os.environ:
             os.environ[key] = value
+
+
+def _unquote(value: str) -> str:
+    """Strip surrounding quotes, but only a genuinely matched pair.
+
+    Stripping quote characters individually corrupts any password that merely
+    happens to start or end with one -- and passwords full of punctuation are
+    exactly the ones worth getting right, because the resulting failure looks
+    like "wrong password" rather than like a parsing bug.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
 
 
 def available_accounts() -> list[str]:

@@ -529,6 +529,34 @@ class ValveAccess:
         return str(self.raw.get("valveId", ""))
 
     @property
+    def user_id(self) -> str:
+        """Return the user this access record belongs to."""
+        return str(self.raw.get("userId", ""))
+
+    @property
+    def valve_name(self) -> str | None:
+        """Return the valve's display name as recorded against this access.
+
+        Observed to match the valve's own ``valveFriendlyName`` for both an
+        owner and a shared user, so naming is per-valve rather than per-user.
+        Kept separate anyway, because the field exists in both places and a
+        future divergence would otherwise be invisible.
+        """
+        value = self.raw.get("valveFriendlyName")
+        return str(value) if value else None
+
+    @property
+    def privilege(self) -> int | None:
+        """Return the raw ``devicePrivilege`` level for this user and valve.
+
+        Both an owner and a fully-shared user report ``2``, so the encoding of
+        anything more restricted is unknown. Exposed raw rather than mapped to
+        invented names: guessing which value means read-only would be exactly
+        the wrong thing to be wrong about.
+        """
+        return _as_int(self.raw.get("devicePrivilege"))
+
+    @property
     def notifications(self) -> NotificationSetting:
         """Return the decoded notification preference bitfield."""
         return NotificationSetting(_as_int(self.raw.get("notificationsList")) or 0)

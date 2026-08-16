@@ -362,6 +362,38 @@ class TestSupportingModels:
         assert access.wants(NotificationSetting.MODE_CHANGE)
         assert not access.wants(NotificationSetting.NO_FLOW)
 
+    def test_access_notifications_use_more_bits_than_are_named(self):
+        # A real "everything on" record: bits 0-30 set, only NEVER cleared.
+        access = ValveAccess({"notificationsList": 2147483645})
+        assert access.wants(NotificationSetting.ALWAYS)
+        assert not access.wants(NotificationSetting.NEVER)
+        assert access.notifications.unknown_bits != 0
+        # The named bits still round-trip exactly.
+        assert int(access.notifications) == 2147483645
+
+    def test_the_named_notification_bits_are_confirmed(self):
+        # Turning off two notifications on one real valve moved the value by
+        # exactly MODE_CHANGE | GENERAL_ALERT, which pins those assignments.
+        everything = ValveAccess({"notificationsList": 2147483645}).notifications
+        reduced = ValveAccess({"notificationsList": 2147483129}).notifications
+        difference = everything & ~reduced
+        assert difference == (
+            NotificationSetting.MODE_CHANGE | NotificationSetting.GENERAL_ALERT
+        )
+
+    def test_access_exposes_privilege_and_identity(self):
+        access = ValveAccess(
+            {
+                "valveId": "v1",
+                "userId": "3616",
+                "devicePrivilege": 2,
+                "valveFriendlyName": "Main House",
+            }
+        )
+        assert access.user_id == "3616"
+        assert access.privilege == 2
+        assert access.valve_name == "Main House"
+
     def test_access_without_notifications(self):
         assert ValveAccess({}).notifications == NotificationSetting(0)
 

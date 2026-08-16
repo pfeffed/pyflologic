@@ -311,6 +311,31 @@ class TestAuthentication:
         with pytest.raises(FloLogicAuthError):
             await make_client().async_connect()
 
+    async def test_a_failed_connect_closes_the_session_it_created(
+        self, hub: FakeHub, monkeypatch: pytest.MonkeyPatch
+    ):
+        # __aexit__ never runs when __aenter__ is what raised, so a failed
+        # connect that leaves its own session open leaks it silently -- which
+        # aiohttp only reports as "Unclosed client session" at interpreter exit.
+        hub.reject_login = True
+        client = FloLogicClient(
+            email="owner@example.com",
+            password="secret",
+            hub_url=hub.url,
+            auto_reconnect=False,
+        )
+        with pytest.raises(FloLogicAuthError):
+            await client.async_connect()
+        assert client._session is None
+
+    async def test_a_failed_connect_leaves_a_supplied_session_open(
+        self, make_client: Callable[..., FloLogicClient], hub: FakeHub, session
+    ):
+        hub.reject_login = True
+        with pytest.raises(FloLogicAuthError):
+            await make_client().async_connect()
+        assert not session.closed
+
     async def test_login_sends_the_device_identity(
         self, client: FloLogicClient, hub: FakeHub
     ):

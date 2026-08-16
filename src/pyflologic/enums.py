@@ -24,6 +24,19 @@ __all__ = [
 ]
 
 
+def _set_flag_names(flag_type: type[IntFlag], value: IntFlag) -> list[str]:
+    """Return the names of every recognized bit set in ``value``."""
+    return [member.name for member in flag_type if member.name and member & value]
+
+
+def _unrecognized_bits(flag_type: type[IntFlag], value: IntFlag) -> int:
+    """Return the bits of ``value`` that ``flag_type`` does not name."""
+    known = 0
+    for member in flag_type:
+        known |= member.value
+    return int(value) & ~known
+
+
 class ValveMode(IntFlag, boundary=KEEP):
     """Bits packed into a valve's ``mode`` field.
 
@@ -68,15 +81,12 @@ class ValveMode(IntFlag, boundary=KEEP):
         Unrecognized bits are deliberately omitted rather than guessed at; use
         :attr:`unknown_bits` to see whether any were present.
         """
-        return [member.name for member in ValveMode if member.name and member & self]
+        return _set_flag_names(ValveMode, self)
 
     @property
     def unknown_bits(self) -> int:
         """Return the raw value of any bits this library does not recognize."""
-        known = 0
-        for member in ValveMode:
-            known |= member.value
-        return int(self) & ~known
+        return _unrecognized_bits(ValveMode, self)
 
 
 class ControlMode(StrEnum):
@@ -201,7 +211,15 @@ FLOWING_STATES: frozenset[FlowState] = frozenset({FlowState.NEW_FLOW, FlowState.
 
 
 class NotificationSetting(IntFlag, boundary=KEEP):
-    """Bits packed into a user access record's ``notificationsList`` field."""
+    """Bits packed into a user access record's ``notificationsList`` field.
+
+    Real records use far more of the word than these twelve bits: a valve with
+    every notification enabled reports ``2147483645``, which is bits 0-30 set
+    with only ``NEVER`` cleared. The named bits below are confirmed -- turning
+    off two notifications on one valve moved the value by exactly
+    ``MODE_CHANGE | GENERAL_ALERT`` -- but bits 12-30 are unidentified and are
+    preserved rather than interpreted. Check :attr:`unknown_bits` for them.
+    """
 
     ALWAYS = 1 << 0
     NEVER = 1 << 1
@@ -215,3 +233,13 @@ class NotificationSetting(IntFlag, boundary=KEEP):
     GENERAL_ALERT = 1 << 9
     CRITICAL_ERROR = 1 << 10
     NO_FLOW = 1 << 11
+
+    @property
+    def flag_names(self) -> list[str]:
+        """Return the names of every recognized notification bit that is set."""
+        return _set_flag_names(NotificationSetting, self)
+
+    @property
+    def unknown_bits(self) -> int:
+        """Return the raw value of any bits this library does not recognize."""
+        return _unrecognized_bits(NotificationSetting, self)

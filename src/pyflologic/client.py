@@ -237,9 +237,7 @@ class FloLogicClient:
                 await self._reconnect_task
             self._reconnect_task = None
         await self._async_close_connection()
-        if self._owns_session and self._session is not None:
-            await self._session.close()
-            self._session = None
+        await self._release_owned_session()
 
     async def _async_open(self) -> None:
         """Establish a connection and bring account state up to date."""
@@ -253,13 +251,18 @@ class FloLogicClient:
             on_disconnect=self._handle_disconnect,
             ping_interval=self._ping_interval,
         )
-        await connection.async_connect()
-        self._connection = connection
         try:
+            await connection.async_connect()
+            self._connection = connection
             await self._async_login(connection)
             await self._async_load_valves(connection)
-        except Exception:
-            await self._async_close_connection()
+        except BaseException:
+            # A failed connect must not strand the socket or the HTTP session.
+            # `async with client` cannot help here: when __aenter__ is what
+            # raises, __aexit__ never runs, so cleanup has to happen inline.
+            await connection.async_close()
+            self._connection = None
+            await self._release_owned_session()
             raise
 
     async def _async_close_connection(self) -> None:
@@ -267,6 +270,13 @@ class FloLogicClient:
         connection, self._connection = self._connection, None
         if connection is not None:
             await connection.async_close()
+
+    async def _release_owned_session(self) -> None:
+        """Close the HTTP session, but only if this client created it."""
+        if self._owns_session and self._session is not None:
+            if not self._session.closed:
+                await self._session.close()
+            self._session = None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Return the HTTP session, creating one if the caller supplied none."""
