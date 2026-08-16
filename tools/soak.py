@@ -120,6 +120,9 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     """Parse arguments and run the soak."""
+    # Line-buffer stdout: a long run redirected to a file is useless if its
+    # progress only appears when the process finally exits.
+    sys.stdout.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account", help="account name from .env")
     parser.add_argument("--minutes", type=float, default=60.0, help="how long to soak")
