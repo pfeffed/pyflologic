@@ -10,3 +10,10 @@ build/
 .coverage
 htmlcov/
 .env
+
+# Local capture artifacts: raw payloads carry the account's address and
+# policy details, and screenshots carry whatever was on screen.
+*.snapshot.json
+captures/
+*.png
+!logo.png
