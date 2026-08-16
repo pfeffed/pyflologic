@@ -1,0 +1,474 @@
+"""Typed views over the JSON objects the FloLogic cloud sends.
+
+Every model keeps the payload it was built from in ``raw``. That is not
+laziness: :meth:`~pyflologic.client.FloLogicClient.async_set_mode` and friends
+have to echo the *entire* valve object back to the hub, so discarding unknown
+fields would break writes against firmware newer than this library.
+"""
+
+from __future__ import annotations
+
+import secrets
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from .const import DEVICE_CODE_PREFIX
+from .enums import (
+    CRITICAL_FLAGS,
+    FLOWING_STATES,
+    STATUS_PRIORITY,
+    WARNING_FLAGS,
+    WATER_OFF_FLAGS,
+    ControlMode,
+    FlowState,
+    NotificationSetting,
+    ValveMode,
+)
+
+__all__ = [
+    "Account",
+    "DeviceIdentity",
+    "JsonDict",
+    "Notification",
+    "SchedulerEvent",
+    "User",
+    "Valve",
+    "ValveAccess",
+]
+
+JsonDict = dict[str, Any]
+
+
+def _as_float(value: Any) -> float | None:
+    """Coerce a JSON value to ``float``, or ``None`` if it is not numeric."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce a JSON value to ``int``, or ``None`` if it is not numeric."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    """Parse a FloLogic timestamp as an aware UTC datetime.
+
+    FloLogic is inconsistent about trailing ``Z`` and about sending an offset
+    at all; naive values are treated as UTC, which matches what the app does.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _now(now: datetime | None) -> datetime:
+    """Return ``now``, defaulting to the current UTC time.
+
+    Taking the clock as a parameter keeps the derived time properties pure and
+    directly testable.
+    """
+    return now if now is not None else datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceIdentity:
+    """The client-device identity FloLogic expects from a mobile app.
+
+    FloLogic ties a session to a device code/token pair. Generate one per
+    Home Assistant install (or per integration) and persist it: reusing a
+    stable identity avoids piling up phantom devices on the account.
+    """
+
+    name: str
+    code: str
+    token: str
+
+    @classmethod
+    def generate(cls, name: str = "pyflologic") -> DeviceIdentity:
+        """Create a fresh random identity to persist and reuse."""
+        return cls(
+            name=name,
+            code=f"{DEVICE_CODE_PREFIX}{uuid4()}",
+            token=secrets.token_urlsafe(32),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class User:
+    """The account holder returned by ``LoggedIn``."""
+
+    raw: JsonDict
+
+    @property
+    def user_id(self) -> str:
+        """Return the FloLogic user ID."""
+        return str(self.raw.get("id", ""))
+
+    @property
+    def email(self) -> str | None:
+        """Return the account email address."""
+        value = self.raw.get("email")
+        return str(value) if value else None
+
+    @property
+    def relog_token(self) -> str | None:
+        """Return the token that lets the next connect skip a full login."""
+        value = self.raw.get("relogToken")
+        return str(value) if value else None
+
+
+@dataclass(frozen=True, slots=True)
+class Valve:
+    """A single FloLogic valve.
+
+    Instances are immutable snapshots. A refresh or a pushed update produces a
+    new ``Valve``; it never mutates one you already hold.
+    """
+
+    raw: JsonDict
+
+    # --- identity -------------------------------------------------------
+
+    @property
+    def valve_id(self) -> str:
+        """Return the FloLogic valve ID used in commands."""
+        return str(self.raw.get("id", ""))
+
+    @property
+    def uuid(self) -> str | None:
+        """Return the valve's hardware UUID, if the cloud reported one."""
+        value = self.raw.get("uuid")
+        return str(value) if value else None
+
+    @property
+    def unique_id(self) -> str:
+        """Return the most stable identifier available for this valve.
+
+        Prefers the hardware UUID so that a valve which is removed and re-added
+        to the account keeps its identity downstream.
+        """
+        return self.uuid or self.valve_id
+
+    @property
+    def name(self) -> str:
+        """Return the friendliest name FloLogic has for this valve."""
+        for key in ("valveFriendlyName", "combinedName", "name"):
+            value = self.raw.get(key)
+            if value:
+                return str(value)
+        return self.uuid or f"FloLogic {self.valve_id}"
+
+    @property
+    def model(self) -> str | None:
+        """Return the device type name, e.g. ``FloLogic Connect``."""
+        value = self.raw.get("deviceTypeName")
+        return str(value) if value else None
+
+    @property
+    def firmware_version(self) -> str | None:
+        """Return the reported firmware/software version."""
+        for key in ("softwareVersion", "valveAndCpFirmwareVersionString"):
+            value = self.raw.get(key)
+            if value:
+                return str(value)
+        return None
+
+    @property
+    def is_gateway(self) -> bool:
+        """Return whether this entry is a G-Connect gateway rather than a valve."""
+        return self.raw.get("isZGateway") is True
+
+    @property
+    def is_controllable(self) -> bool:
+        """Return whether this device accepts mode changes.
+
+        Gateways appear in the same device array as valves but have nothing to
+        open or close.
+        """
+        return not self.is_gateway
+
+    # --- live state -----------------------------------------------------
+
+    @property
+    def is_online(self) -> bool:
+        """Return whether the cloud currently considers the valve reachable."""
+        return bool(self.raw.get("online"))
+
+    @property
+    def mode(self) -> ValveMode:
+        """Return the raw mode bitfield, decoded."""
+        return ValveMode(_as_int(self.raw.get("mode")) or 0)
+
+    @property
+    def control_mode(self) -> ControlMode | None:
+        """Return the settable mode the valve is in, if it can be determined."""
+        return ControlMode.from_flag(self.mode)
+
+    @property
+    def status(self) -> str:
+        """Return one headline status name, most newsworthy bit wins."""
+        mode = self.mode
+        if not mode:
+            return "unknown"
+        for flag in STATUS_PRIORITY:
+            if mode & flag and flag.name:
+                return flag.name.lower()
+        return "unknown"
+
+    @property
+    def flow_state(self) -> FlowState | None:
+        """Return the reported flow state, or ``None`` if unrecognized."""
+        return FlowState.parse(self.raw.get("flowState"))
+
+    @property
+    def is_water_flowing(self) -> bool:
+        """Return whether water is moving through the valve right now."""
+        state = self.flow_state
+        return self.is_online and state is not None and state in FLOWING_STATES
+
+    @property
+    def current_flow_oz_per_min(self) -> float | None:
+        """Return the instantaneous flow rate in ounces per minute."""
+        return _as_float(self.raw.get("currentFlow"))
+
+    @property
+    def temperature_f(self) -> float | None:
+        """Return the water temperature in degrees Fahrenheit."""
+        return _as_float(self.raw.get("temperature"))
+
+    @property
+    def battery_percent(self) -> float | None:
+        """Return the backup battery level as a percentage."""
+        return _as_float(self.raw.get("batteryLevel"))
+
+    @property
+    def signal_strength_dbm(self) -> float | None:
+        """Return the wireless signal strength in dBm."""
+        return _as_float(self.raw.get("signalStrength"))
+
+    @property
+    def active_water_off_flags(self) -> list[ValveMode]:
+        """Return every set bit that means the valve has closed."""
+        return [flag for flag in WATER_OFF_FLAGS if self.mode & flag]
+
+    @property
+    def active_warning_flags(self) -> list[ValveMode]:
+        """Return every set bit that means something needs attention."""
+        return [flag for flag in WARNING_FLAGS if self.mode & flag]
+
+    @property
+    def active_critical_flags(self) -> list[ValveMode]:
+        """Return every set bit that means the valve is faulted."""
+        return [flag for flag in CRITICAL_FLAGS if self.mode & flag]
+
+    # --- settings -------------------------------------------------------
+
+    @property
+    def flow_sensitivity_oz_per_min(self) -> float | None:
+        """Return the drip-detection threshold in ounces per minute."""
+        return _as_float(self.raw.get("dripRate"))
+
+    @property
+    def home_limit_minutes(self) -> float | None:
+        """Return the continuous-flow limit while in Home mode."""
+        return _as_float(self.raw.get("homeIntervalTime"))
+
+    @property
+    def away_limit_minutes(self) -> float | None:
+        """Return the continuous-flow limit while in Away mode."""
+        return _as_float(self.raw.get("awayIntervalTime"))
+
+    @property
+    def bypass_minutes(self) -> float | None:
+        """Return how long Bypass mode lasts before reverting."""
+        return _as_float(self.raw.get("bypassTime"))
+
+    @property
+    def auto_away_hours(self) -> float | None:
+        """Return the idle time after which the valve switches itself to Away."""
+        return _as_float(self.raw.get("autoAwayTime"))
+
+    @property
+    def low_temp_alert_f(self) -> float | None:
+        """Return the temperature that triggers a low-temperature alert."""
+        return _as_float(self.raw.get("lowTemperatureAlert"))
+
+    @property
+    def low_temp_shutoff_f(self) -> float | None:
+        """Return the temperature that triggers an automatic shutoff."""
+        return _as_float(self.raw.get("lowTemperatureLimit"))
+
+    @property
+    def pre_alert_minutes(self) -> float | None:
+        """Return how long before an auto-shutoff FloLogic warns the user."""
+        return _as_float(self.raw.get("preAlertNoticeInterval"))
+
+    @property
+    def no_flow_notice_seconds(self) -> float | None:
+        """Return the no-flow duration that triggers a notice."""
+        return _as_float(self.raw.get("noFlowNoticeInterval"))
+
+    @property
+    def current_flow_limit_minutes(self) -> float | None:
+        """Return the flow limit that applies in the valve's current mode."""
+        limits = {
+            ControlMode.HOME: self.home_limit_minutes,
+            ControlMode.AWAY: self.away_limit_minutes,
+            ControlMode.BYPASS: self.bypass_minutes,
+        }
+        mode = self.control_mode
+        return limits.get(mode) if mode is not None else None
+
+    # --- derived timing -------------------------------------------------
+
+    @property
+    def flow_started_at(self) -> datetime | None:
+        """Return when the current flow event began, if water is flowing."""
+        if not self.is_water_flowing:
+            return None
+        return _as_datetime(self.raw.get("lastNewFlow"))
+
+    def flow_elapsed_seconds(self, now: datetime | None = None) -> int | None:
+        """Return how long water has been flowing, in seconds."""
+        started_at = self.flow_started_at
+        if started_at is None:
+            return None
+        return max(0, int((_now(now) - started_at).total_seconds()))
+
+    def shutoff_countdown_seconds(self, now: datetime | None = None) -> int | None:
+        """Estimate seconds until FloLogic closes the valve for continuous flow.
+
+        Returns ``None`` when water is not flowing or the active mode has no
+        flow limit -- the estimate is derived locally from ``lastNewFlow`` plus
+        the mode's limit, because the cloud does not publish a countdown.
+        """
+        started_at = self.flow_started_at
+        limit_minutes = self.current_flow_limit_minutes
+        if started_at is None or not limit_minutes or limit_minutes <= 0:
+            return None
+        remaining = started_at.timestamp() + limit_minutes * 60 - _now(now).timestamp()
+        return max(0, int(remaining))
+
+    def is_in_pre_alert_window(self, now: datetime | None = None) -> bool:
+        """Return whether the valve is inside its advance-shutoff warning window.
+
+        This is purely the valve's timing. Whether the *user* would be notified
+        also depends on :attr:`ValveAccess.notifications` carrying
+        :attr:`~pyflologic.enums.NotificationSetting.ADVANCE_SHUTOFF`.
+        """
+        countdown = self.shutoff_countdown_seconds(now)
+        pre_alert = self.pre_alert_minutes
+        if countdown is None or not pre_alert:
+            return False
+        return countdown <= pre_alert * 60
+
+
+@dataclass(frozen=True, slots=True)
+class ValveAccess:
+    """One user's access record and notification preferences for one valve."""
+
+    raw: JsonDict
+
+    @property
+    def valve_id(self) -> str:
+        """Return the valve this access record applies to."""
+        return str(self.raw.get("valveId", ""))
+
+    @property
+    def notifications(self) -> NotificationSetting:
+        """Return the decoded notification preference bitfield."""
+        return NotificationSetting(_as_int(self.raw.get("notificationsList")) or 0)
+
+    def wants(self, setting: NotificationSetting) -> bool:
+        """Return whether the user has opted into a given notification."""
+        return bool(self.notifications & setting)
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerEvent:
+    """A scheduled mode change stored in the FloLogic cloud."""
+
+    raw: JsonDict
+
+    @property
+    def valve_id(self) -> str:
+        """Return the valve this event targets."""
+        return str(self.raw.get("valveId", ""))
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether the entry actually does something.
+
+        FloLogic keeps empty placeholder rows in the scheduler table; only
+        entries carrying both an action and a payload will ever fire.
+        """
+        return (
+            self.raw.get("action") is not None
+            and self.raw.get("actionPayload") is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Notification:
+    """One row of a valve's notification history."""
+
+    raw: JsonDict
+
+    @property
+    def valve_id(self) -> str:
+        """Return the valve the notification came from."""
+        return str(self.raw.get("valveId", ""))
+
+    @property
+    def created_at(self) -> datetime | None:
+        """Return when FloLogic recorded the notification."""
+        for key in ("created", "createdDate", "dateCreated"):
+            parsed = _as_datetime(self.raw.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
+    @property
+    def message(self) -> str | None:
+        """Return the notification text, if present."""
+        for key in ("message", "text", "body"):
+            value = self.raw.get(key)
+            if value:
+                return str(value)
+        return None
+
+
+@dataclass(slots=True)
+class Account:
+    """Everything the client knows about one FloLogic account."""
+
+    user: User
+    valves: dict[str, Valve] = field(default_factory=dict)
+    accesses: dict[str, ValveAccess] = field(default_factory=dict)
+
+    @property
+    def controllable_valves(self) -> dict[str, Valve]:
+        """Return only the valves that can be commanded, excluding gateways."""
+        return {
+            valve_id: valve
+            for valve_id, valve in self.valves.items()
+            if valve.is_controllable
+        }
