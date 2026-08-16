@@ -138,6 +138,21 @@ class TestFlowState:
         assert FlowState.parse("4") is None
         assert valve(flowState=99).is_water_flowing is False
 
+    def test_flow_and_shutoff_are_not_mutually_exclusive(self):
+        # Observed live: a valve watched physically closing reported flowState
+        # 4 for several seconds while its mode was already SHUTOFF. Nothing
+        # should assume a shut valve cannot report flow.
+        subject = valve(mode=int(ValveMode.SHUTOFF), flowState=4)
+        assert subject.control_mode is ControlMode.SHUTOFF
+        assert subject.is_water_flowing is True
+
+    def test_a_closed_valve_reports_no_flow_not_valve_closed(self):
+        # FlowState.VALVE_CLOSED has never been seen on real hardware; a valve
+        # in SHUTOFF reports NO_FLOW like any other idle valve.
+        subject = valve(mode=int(ValveMode.SHUTOFF), flowState=1)
+        assert subject.flow_state is FlowState.NO_FLOW
+        assert subject.is_water_flowing is False
+
     def test_booleans_are_not_flow_states(self):
         # bool is an int subclass; True must not silently become NO_FLOW.
         assert FlowState.parse(True) is None

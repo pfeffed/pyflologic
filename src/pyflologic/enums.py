@@ -211,7 +211,14 @@ been observed faulted. Consumers that care about faults should read
 
 
 class FlowState(IntEnum):
-    """Values FloLogic reports in a valve's ``flowState`` field."""
+    """Values FloLogic reports in a valve's ``flowState`` field.
+
+    ``NO_FLOW``, ``NEW_FLOW`` and ``FLOW`` are all confirmed against live
+    hardware. ``VALVE_CLOSED`` is not: a valve driven into SHUTOFF, watched
+    physically closing, reported ``NO_FLOW`` throughout. The value is carried
+    on inherited authority alone, so do not infer a closed valve from it --
+    read :attr:`~pyflologic.models.Valve.mode` for that.
+    """
 
     NO_FLOW = 1
     NEW_FLOW = 2

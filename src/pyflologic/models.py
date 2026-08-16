@@ -324,7 +324,15 @@ class Valve:
 
     @property
     def is_water_flowing(self) -> bool:
-        """Return whether water is moving through the valve right now."""
+        """Return whether the valve currently reports water moving through it.
+
+        This is the sensor's word, and it is *not* mutually exclusive with the
+        valve being shut. A valve watched physically closing reported flow for
+        about four seconds afterwards, with the household drawing water at the
+        time; whether that was the line draining or the close still completing
+        was not established. Treat "flowing while shut" as unremarkable for a
+        few seconds after a shutoff, and as worth investigating if it persists.
+        """
         state = self.flow_state
         return self.is_online and state is not None and state in FLOWING_STATES
 
