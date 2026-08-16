@@ -40,6 +40,8 @@ __all__ = [
 
 JsonDict = dict[str, Any]
 
+_PERCENT_RANGE = (0.0, 100.0)
+
 
 def _as_float(value: Any) -> float | None:
     """Coerce a JSON value to ``float``, or ``None`` if it is not numeric."""
@@ -77,6 +79,29 @@ def _as_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _as_enabled_float(value: Any) -> float | None:
+    """Coerce to ``float``, treating a non-positive value as "not configured".
+
+    FloLogic disables a setting by storing a sentinel rather than omitting it:
+    real accounts carry ``autoAwayTime: -18``, ``delayAwayIntervalTime: -1``
+    and ``winterModeTime: -0.5``. Reporting "-18 hours" would be nonsense, so
+    anything at or below zero reads as ``None``.
+    """
+    parsed = _as_float(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _first_datetime(raw: JsonDict, keys: tuple[str, ...]) -> datetime | None:
+    """Return the first key in ``keys`` that parses as a timestamp."""
+    for key in keys:
+        parsed = _as_datetime(raw.get(key))
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _now(now: datetime | None) -> datetime:
@@ -200,10 +225,43 @@ class Valve:
     def is_controllable(self) -> bool:
         """Return whether this device accepts mode changes.
 
-        Gateways appear in the same device array as valves but have nothing to
-        open or close.
+        The device array mixes in everything on the account: gateways, leak
+        sensors, repeaters and Z-inputs all arrive alongside real valves and
+        none of them have anything to open or close. Checking each flag rather
+        than only ``isZGateway`` keeps a sensor from being offered as a valve.
         """
-        return not self.is_gateway
+        return not any(
+            self.raw.get(flag) is True
+            for flag in ("isZGateway", "isSensor", "isZRepeater", "isZInput")
+        )
+
+    @property
+    def device_kind(self) -> str:
+        """Return a coarse device kind, for callers that want to group devices."""
+        for flag, kind in (
+            ("isZGateway", "gateway"),
+            ("isSensor", "sensor"),
+            ("isZRepeater", "repeater"),
+            ("isZInput", "input"),
+        ):
+            if self.raw.get(flag) is True:
+                return kind
+        return "valve"
+
+    @property
+    def network_name(self) -> str | None:
+        """Return the FloLogic network (site) name this device belongs to.
+
+        Useful for splitting one account's valves across houses.
+        """
+        value = self.raw.get("networkName")
+        return str(value) if value else None
+
+    @property
+    def address(self) -> str | None:
+        """Return the street address FloLogic has on file for this valve."""
+        value = self.raw.get("valveAddress")
+        return str(value) if value else None
 
     # --- live state -----------------------------------------------------
 
@@ -255,14 +313,37 @@ class Valve:
         return _as_float(self.raw.get("temperature"))
 
     @property
-    def battery_percent(self) -> float | None:
-        """Return the backup battery level as a percentage."""
+    def battery_level_raw(self) -> float | None:
+        """Return ``batteryLevel`` exactly as the cloud reported it.
+
+        Its units are not a settled question -- see :attr:`battery_percent`.
+        """
         return _as_float(self.raw.get("batteryLevel"))
+
+    @property
+    def battery_percent(self) -> float | None:
+        """Return the backup battery level as a percentage, if it plausibly is one.
+
+        Real WiFi Connect valves have been observed reporting ``batteryLevel:
+        8192`` alongside another valve on the same account reporting ``50``, so
+        the field is clearly not a percentage on every model. Rather than
+        publish "8192%", anything outside 0-100 reads as ``None`` and callers
+        that want the number regardless can use :attr:`battery_level_raw`.
+        """
+        value = self.battery_level_raw
+        if value is None or not _PERCENT_RANGE[0] <= value <= _PERCENT_RANGE[1]:
+            return None
+        return value
 
     @property
     def signal_strength_dbm(self) -> float | None:
         """Return the wireless signal strength in dBm."""
         return _as_float(self.raw.get("signalStrength"))
+
+    @property
+    def last_seen(self) -> datetime | None:
+        """Return when the cloud last heard from this valve."""
+        return _first_datetime(self.raw, ("lastSeen", "modified"))
 
     @property
     def active_water_off_flags(self) -> list[ValveMode]:
@@ -303,8 +384,17 @@ class Valve:
 
     @property
     def auto_away_hours(self) -> float | None:
-        """Return the idle time after which the valve switches itself to Away."""
-        return _as_float(self.raw.get("autoAwayTime"))
+        """Return the idle time after which the valve switches itself to Away.
+
+        ``None`` when the feature is off; FloLogic stores that as a negative
+        sentinel rather than omitting the field.
+        """
+        return _as_enabled_float(self.raw.get("autoAwayTime"))
+
+    @property
+    def delay_away_minutes(self) -> float | None:
+        """Return the Delay Away interval, or ``None`` when it is disabled."""
+        return _as_enabled_float(self.raw.get("delayAwayIntervalTime"))
 
     @property
     def low_temp_alert_f(self) -> float | None:
@@ -341,10 +431,19 @@ class Valve:
 
     @property
     def flow_started_at(self) -> datetime | None:
-        """Return when the current flow event began, if water is flowing."""
+        """Return when the current flow event began, if water is flowing.
+
+        The field name is model-dependent. Existing reverse engineering used
+        ``lastNewFlow``, but WiFi Connect valves do not send that key at all --
+        they send ``lastFlowChange``. Reading only the first name silently
+        disables every derived timing value on that hardware, so both are
+        tried, most specific first.
+        """
         if not self.is_water_flowing:
             return None
-        return _as_datetime(self.raw.get("lastNewFlow"))
+        return _first_datetime(
+            self.raw, ("lastNewFlow", "lastFlowChange", "lastFlowAnyChange")
+        )
 
     def flow_elapsed_seconds(self, now: datetime | None = None) -> int | None:
         """Return how long water has been flowing, in seconds."""

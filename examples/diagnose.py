@@ -61,6 +61,16 @@ MAPPED_FIELDS = {
     "preAlertNoticeInterval",
     "noFlowNoticeInterval",
     "lastNewFlow",
+    "lastFlowChange",
+    "lastFlowAnyChange",
+    "lastSeen",
+    "modified",
+    "networkName",
+    "valveAddress",
+    "delayAwayIntervalTime",
+    "isSensor",
+    "isZRepeater",
+    "isZInput",
 }
 
 SECRET_HINTS = ("password", "token", "secret", "apikey")
@@ -80,8 +90,10 @@ def describe_valve(valve: Any) -> None:
     print("=" * 70)
     print(f"  model            : {valve.model}")
     print(f"  firmware         : {valve.firmware_version}")
-    print(f"  controllable     : {valve.is_controllable} (gateway={valve.is_gateway})")
-    print(f"  online           : {valve.is_online}")
+    print(f"  kind             : {valve.device_kind}")
+    print(f"  controllable     : {valve.is_controllable}")
+    print(f"  network / address: {valve.network_name} / {valve.address}")
+    print(f"  online           : {valve.is_online}  (last seen {valve.last_seen})")
     print(f"  raw mode         : {int(valve.mode)}")
     print(f"  decoded flags    : {valve.mode.flag_names}")
     if valve.mode.unknown_bits:
@@ -92,7 +104,8 @@ def describe_valve(valve: Any) -> None:
     print(f"  water flowing    : {valve.is_water_flowing}")
     print(f"  current flow     : {valve.current_flow_oz_per_min} oz/min")
     print(f"  temperature      : {valve.temperature_f} F")
-    print(f"  battery          : {valve.battery_percent} %")
+    battery = f"{valve.battery_percent} %" if valve.battery_percent else "n/a"
+    print(f"  battery          : {battery} (raw {valve.battery_level_raw})")
     print(f"  signal           : {valve.signal_strength_dbm} dBm")
     print("  --- settings ---")
     print(f"  flow sensitivity : {valve.flow_sensitivity_oz_per_min} oz/min")
@@ -121,6 +134,57 @@ def describe_valve(valve: Any) -> None:
             if len(rendered) > 60:
                 rendered = f"{rendered[:57]}..."
             print(f"    {key:<38} = {rendered}")
+
+
+async def watch(client: FloLogicClient, account: Account, seconds: float) -> None:
+    """Print every raw field that changes, so flow behavior can be observed.
+
+    Which timestamp field marks the start of a flow event is model-dependent
+    and the single most important thing left to confirm -- the shutoff
+    countdown is derived from it. Diffing raw payloads answers that by
+    observation rather than by guessing at field names.
+    """
+    print(f"\n{'=' * 70}")
+    print(f"Watching for {seconds:g}s -- run some water now")
+    print(f"{'=' * 70}")
+    print("Every changed raw field is printed. Watch for which timestamp")
+    print("field moves when flowState leaves 1 (no flow).\n")
+
+    previous = {valve_id: dict(valve.raw) for valve_id, valve in account.valves.items()}
+    started = asyncio.get_running_loop().time()
+
+    def on_update(updated: Account) -> None:
+        elapsed = asyncio.get_running_loop().time() - started
+        for valve_id, valve in updated.valves.items():
+            before = previous.get(valve_id, {})
+            changes = {
+                key: (before.get(key), value)
+                for key, value in valve.raw.items()
+                if before.get(key) != value
+            }
+            previous[valve_id] = dict(valve.raw)
+            if not changes:
+                continue
+            print(f"[{elapsed:6.1f}s] {valve.name}")
+            print(
+                f"           flowing={valve.is_water_flowing} "
+                f"flowState={valve.flow_state} "
+                f"status={valve.status} "
+                f"rate={valve.current_flow_oz_per_min} "
+                f"countdown={valve.shutoff_countdown_seconds()}"
+            )
+            for key, (old, new) in sorted(changes.items()):
+                marker = "  <-- FLOW TIMESTAMP?" if "flow" in key.lower() else ""
+                print(f"           {key:<34} {old!r} -> {new!r}{marker}")
+            print()
+
+    client.add_listener(on_update)
+    await asyncio.sleep(seconds)
+    print("Watch finished.")
+    print(
+        "If updates arrived throughout, the keepalive is holding the session "
+        "open -- that was the other thing worth confirming."
+    )
 
 
 async def main() -> int:
@@ -195,19 +259,7 @@ async def main() -> int:
             print(f"  {notification.created_at}  {notification.message}")
 
         if args.watch:
-            print(f"\nWatching for {args.watch:g}s -- run water to see a push...")
-
-            def on_update(updated: Account) -> None:
-                for valve in updated.controllable_valves.values():
-                    print(
-                        f"  [push] {valve.name}: {valve.status} "
-                        f"flowing={valve.is_water_flowing} "
-                        f"rate={valve.current_flow_oz_per_min}"
-                    )
-
-            client.add_listener(on_update)
-            await asyncio.sleep(args.watch)
-            print("Done. If the session survived, keepalive is working.")
+            await watch(client, account, args.watch)
     finally:
         await client.async_disconnect()
 

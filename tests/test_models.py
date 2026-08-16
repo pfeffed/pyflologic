@@ -222,6 +222,87 @@ class TestValveIdentity:
         assert valve().is_controllable is True
 
 
+class TestRealHardwareQuirks:
+    """Behaviors confirmed against real WiFi Connect valves.
+
+    Each of these was wrong before a live account was inspected, so they are
+    pinned rather than left to the next refactor's judgement.
+    """
+
+    def test_battery_level_outside_percent_range_is_not_a_percentage(self):
+        # A real valve reported batteryLevel 8192 while another on the same
+        # account reported 50. Publishing "8192%" would be worse than nothing.
+        subject = valve(batteryLevel=8192)
+        assert subject.battery_percent is None
+        assert subject.battery_level_raw == 8192
+
+    def test_plausible_battery_level_is_kept(self):
+        assert valve(batteryLevel=50).battery_percent == 50
+
+    @pytest.mark.parametrize("raw", [-18, -1, 0, -0.5])
+    def test_negative_settings_read_as_disabled(self, raw):
+        # FloLogic disables a setting with a sentinel, not by omitting it.
+        assert valve(autoAwayTime=raw).auto_away_hours is None
+        assert valve(delayAwayIntervalTime=raw).delay_away_minutes is None
+
+    def test_positive_settings_are_kept(self):
+        assert valve(autoAwayTime=24).auto_away_hours == 24
+
+    def test_flow_timestamp_falls_back_to_last_flow_change(self):
+        # WiFi Connect valves never send lastNewFlow. Reading only that key
+        # silently disabled every derived timing value on this hardware.
+        subject = valve(flowState=4, lastFlowChange="2026-01-01T12:00:00")
+        assert subject.flow_started_at == FLOW_START
+
+    def test_last_new_flow_wins_when_both_are_present(self):
+        subject = valve(
+            flowState=4,
+            lastNewFlow="2026-01-01T12:00:00Z",
+            lastFlowChange="2020-01-01T00:00:00Z",
+        )
+        assert subject.flow_started_at == FLOW_START
+
+    def test_countdown_works_from_the_fallback_timestamp(self):
+        subject = valve(
+            flowState=4,
+            mode=int(ValveMode.HOME),
+            homeIntervalTime=59,
+            lastFlowChange="2026-01-01T12:00:00",
+        )
+        countdown = subject.shutoff_countdown_seconds(FLOW_START + timedelta(minutes=9))
+        assert countdown == 50 * 60
+
+    @pytest.mark.parametrize(
+        ("flag", "kind"),
+        [
+            ("isZGateway", "gateway"),
+            ("isSensor", "sensor"),
+            ("isZRepeater", "repeater"),
+            ("isZInput", "input"),
+        ],
+    )
+    def test_non_valve_devices_are_not_controllable(self, flag, kind):
+        subject = valve(**{flag: True})
+        assert subject.is_controllable is False
+        assert subject.device_kind == kind
+
+    def test_a_wifi_connect_valve_is_controllable(self):
+        # The real payload: isZConnect is False on WiFi hardware, which is
+        # exactly what the old single-valve selection logic keyed on.
+        subject = valve(isZConnect=False, isAnyConnect=True, isWifiConnectDevice=True)
+        assert subject.is_controllable is True
+        assert subject.device_kind == "valve"
+
+    def test_site_metadata_is_exposed(self):
+        subject = valve(networkName="Riverside", valveAddress="12 Example Lane")
+        assert subject.network_name == "Riverside"
+        assert subject.address == "12 Example Lane"
+
+    def test_last_seen_falls_back_to_modified(self):
+        assert valve(modified="2026-01-01T12:00:00").last_seen == FLOW_START
+        assert valve().last_seen is None
+
+
 class TestNumericCoercion:
     """Telemetry arrives as ints, floats, strings, or nothing at all."""
 
