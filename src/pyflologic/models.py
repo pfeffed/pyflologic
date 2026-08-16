@@ -567,6 +567,15 @@ class Valve:
         Returns ``None`` when water is not flowing or the active mode has no
         flow limit -- the estimate is derived locally from ``lastNewFlow`` plus
         the mode's limit, because the cloud does not publish a countdown.
+
+        The arithmetic is exact where it applies: against a 99 minute limit
+        with 37 seconds elapsed, this matched the app's own display to the
+        second. But it can only run once the cloud reports flow, and short
+        flows never get that far. Three consecutive live shutoffs on a 30
+        second Away limit produced no flow report at all -- ``flowState``
+        stayed ``NO_FLOW`` from the tap opening until the valve tripped -- so
+        this stayed ``None`` throughout each one. Treat it as useful for long
+        draws and absent for brief ones, not as a general-purpose countdown.
         """
         started_at = self.flow_started_at
         limit_minutes = self.current_flow_limit_minutes
@@ -665,14 +674,42 @@ class SchedulerEvent:
 
 @dataclass(frozen=True, slots=True)
 class Notification:
-    """One row of a valve's notification history."""
+    """One row of a valve's notification history.
+
+    This is the closest thing FloLogic has to an event log, and it is more
+    trustworthy than the live telemetry for flow events: a valve that shut
+    itself off after 30 seconds of flow never showed that flow in
+    :attr:`Valve.flow_state`, but did record
+
+        "WATER SHUTOFF: Away flow limit of 30 seconds exceeded."
+
+    Rows carry a ``title`` category and a human-readable ``text`` that names
+    the actor and the threshold. Note that the payload has no ``valveId``;
+    rows come back already scoped to the valves that were asked for.
+    """
 
     raw: JsonDict
 
     @property
     def valve_id(self) -> str:
-        """Return the valve the notification came from."""
+        """Return the valve the notification came from, if the row names one."""
         return str(self.raw.get("valveId", ""))
+
+    @property
+    def notification_id(self) -> int | None:
+        """Return FloLogic's ID for this row, for de-duplicating a feed."""
+        return _as_int(self.raw.get("id"))
+
+    @property
+    def title(self) -> str | None:
+        """Return the notification's category, e.g. ``Mode Change``."""
+        value = self.raw.get("title")
+        return str(value) if value else None
+
+    @property
+    def is_delivered(self) -> bool:
+        """Return whether FloLogic considers the notification delivered."""
+        return bool(self.raw.get("delivered"))
 
     @property
     def created_at(self) -> datetime | None:

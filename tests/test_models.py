@@ -510,6 +510,34 @@ class TestSupportingModels:
         assert Notification({}).message is None
         assert Notification({}).created_at is None
 
+    def test_a_real_shutoff_notification(self):
+        # Verbatim from the live account. The history is the only place the
+        # flow that tripped the limit is recorded at all -- flowState never
+        # reported it.
+        row = Notification(
+            {
+                "id": 52495530,
+                "created": "2026-08-16T18:33:58.147",
+                "title": "Mode Change",
+                "text": (
+                    "WATER SHUTOFF: Away flow limit of 30 seconds exceeded. "
+                    "Water has been shut off for 34 Sample Road."
+                ),
+                "delivered": False,
+                "accessId": 33232,
+            }
+        )
+        assert row.notification_id == 52495530
+        assert row.title == "Mode Change"
+        assert row.is_delivered is False
+        assert row.message is not None
+        assert "Away flow limit of 30 seconds exceeded" in row.message
+        assert row.created_at is not None
+        assert row.created_at.year == 2026
+        # Rows come back already scoped to the valves asked for, with no
+        # valveId of their own.
+        assert row.valve_id == ""
+
 
 class TestDeviceIdentity:
     """Identities must be unique and reusable."""

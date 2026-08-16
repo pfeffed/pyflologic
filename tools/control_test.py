@@ -159,7 +159,7 @@ async def run(args: argparse.Namespace) -> int:
 
         deadline = asyncio.get_running_loop().time() + args.observe
         while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(args.poll)
             try:
                 await client.async_refresh()
             except FloLogicError as err:
@@ -205,6 +205,12 @@ def main() -> int:
         type=float,
         default=45.0,
         help="seconds to watch before restoring (default: 45)",
+    )
+    parser.add_argument(
+        "--poll",
+        type=float,
+        default=POLL_SECONDS,
+        help=f"seconds between polls while observing (default: {POLL_SECONDS:g})",
     )
     parser.add_argument(
         "--prompt",
