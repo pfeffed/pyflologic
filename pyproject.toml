@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyflologic"
+version = "0.1.0"
+description = "Async client for the FloLogic Connect leak-detection valve cloud service"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "David Pfeffer" }]
+keywords = ["flologic", "water", "leak", "valve", "home-assistant", "signalr"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Home Automation",
+  "Typing :: Typed",
+]
+dependencies = ["aiohttp>=3.9"]
+
+[project.urls]
+Homepage = "https://github.com/dpfeffer/pyflologic"
+Issues = "https://github.com/dpfeffer/pyflologic/issues"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=5.0",
+  "mypy>=1.11",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyflologic"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "A", "ANN", "ARG", "ASYNC", "B", "C4", "E", "F", "FBT", "I", "ISC",
+  "N", "PERF", "PIE", "PL", "PT", "PTH", "RET", "RSE", "RUF", "SIM", "SLF",
+  "T20", "TID", "TRY", "UP", "W",
+]
+ignore = [
+  "ANN401",  # Any is legitimate at the raw-JSON boundary
+  "ASYNC109", # a per-request timeout is part of this library's public API
+  "PLR0913", # settings updates genuinely take many optional kwargs
+  "TRY003",  # short inline exception messages are fine here
+  "TRY400",  # exception() would be too loud for expected reconnect churn
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "FBT", "PLR2004", "SLF001", "S101", "ARG"]
+"examples/*" = ["T201", "PLR2004"]  # a diagnostic script exists to print
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyflologic"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+files = ["src/pyflologic"]
