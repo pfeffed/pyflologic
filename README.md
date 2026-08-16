@@ -91,7 +91,7 @@ save({"name": device.name, "code": device.code, "token": device.token})
 | `flow_state`, `is_water_flowing`, `current_flow_oz_per_min` | Flow |
 | `temperature_f`, `battery_percent`, `signal_strength_dbm` | Telemetry |
 | `active_water_off_flags` / `active_warning_flags` / `active_critical_flags` | Grouped conditions |
-| `flow_started_at`, `flow_elapsed_seconds()`, `shutoff_countdown_seconds()` | Derived timing |
+| `flow_started_at`, `flow_elapsed_seconds()`, `shutoff_countdown_seconds()` | Derived timing — see below |
 
 FloLogic packs both the current mode and every active condition into one
 integer, so `mode` is an `IntFlag`:
@@ -124,6 +124,13 @@ Whether the *user* would actually be warned also depends on their notification
 preferences — fetch those with `async_refresh_accesses()` and check
 `access.wants(NotificationSetting.ADVANCE_SHUTOFF)`.
 
+**The countdown only works for long draws.** It matched the app to the second
+against a 99-minute limit, but the cloud reports flow with tens of seconds of
+latency: across three live auto-shutoffs on a 30-second limit, `flow_state`
+never left `NO_FLOW` and the countdown stayed `None` for the whole event. Short
+flows are simply never visible. `async_fetch_notifications()` always has the
+event afterwards, with the threshold that was crossed.
+
 ## Writing
 
 ```python
@@ -133,12 +140,39 @@ await client.async_update_settings(
     valve_id,
     home_limit_minutes=45,
     away_limit_minutes=5,
-    low_temp_shutoff_f=40,
 )
 
 # Escape hatch for fields this library has not modeled:
 await client.async_send_command(valve_id, {"someNewField": 1})
 ```
+
+A command returns once the *valve* reports the change, not when the server
+acknowledges it — the hub never sends the `StateChangeResult` its API implies,
+so waiting on that means every command appears to time out while succeeding.
+Confirmation typically lands in about a second.
+
+### Settings with a built-in switch
+
+Auto Away, Delay Away, Winter Mode, Guest Mode and the two temperature
+thresholds are stored as one *signed* number: the sign is the on/off switch and
+the magnitude is the value. FloLogic disables them by negating rather than
+clearing, so a valve with Auto Away off still reports `autoAwayTime: -18` and
+the app shows an off toggle beside "18 hours".
+
+```python
+setting = valve.auto_away
+setting.enabled     # False
+setting.configured  # 18.0  -- kept even while off
+setting.effective   # None  -- the value to actually act on
+
+# Change one half; the other is read from the valve and preserved.
+await client.async_set_toggled_setting(valve_id, "auto_away", enabled=False)
+await client.async_set_toggled_setting(valve_id, "low_temp_shutoff", value=36)
+```
+
+`enabled` is the only way to express off — a negative `value` is read as a
+magnitude. Two ways to spell the same bit is how a caller disables a freeze
+shutoff while believing they raised its threshold.
 
 ## Errors
 
