@@ -75,11 +75,19 @@ MAPPED_FIELDS = {
 
 SECRET_HINTS = ("password", "token", "secret", "apikey")
 
+# Personal details that are not protocol signal. Site name and street address
+# are deliberately *not* here -- they are how a multi-house account gets split
+# into the right places, so they stay visible.
+PII_HINTS = ("insurance", "policy", "firstname", "lastname", "phone", "ssn")
+
 
 def redact(key: str, value: Any) -> Any:
-    """Hide anything that looks like a credential, so output is shareable."""
-    if any(hint in key.lower() for hint in SECRET_HINTS):
-        return "<redacted>"
+    """Hide credentials and personal details, so output is safe to paste."""
+    lowered = key.lower()
+    if any(hint in lowered for hint in SECRET_HINTS):
+        return "<redacted:secret>"
+    if any(hint in lowered for hint in PII_HINTS):
+        return "<redacted:pii>"
     return value
 
 
