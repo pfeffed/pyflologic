@@ -293,6 +293,42 @@ class TestRealHardwareQuirks:
         assert subject.is_controllable is True
         assert subject.device_kind == "valve"
 
+    def test_battery_level_can_be_absurd(self):
+        # Two of three real valves reported powers of two here: 8192 and
+        # 134217728. Neither is a percentage.
+        assert valve(batteryLevel=134217728).battery_percent is None
+        assert valve(batteryLevel=134217728).battery_level_raw == 134217728
+
+    def test_last_new_flow_does_not_move_when_flow_stops(self):
+        # Confirmed live: lastFlowChange updates on both start and stop,
+        # lastNewFlow only on start. Preferring lastNewFlow is what keeps the
+        # countdown anchored to the beginning of the event.
+        subject = valve(
+            flowState=4,
+            mode=int(ValveMode.HOME),
+            homeIntervalTime=99,
+            lastNewFlow="2026-01-01T12:00:00",
+            lastFlowChange="2026-01-01T12:04:00",
+        )
+        assert subject.flow_started_at == FLOW_START
+
+    def test_water_sensor_limits(self):
+        subject = valve(
+            waterSensorHumidityAlertLimit=75,
+            waterSensorHumidityShutoffLimit=95,
+            waterSensorTemperatureAlertLimit=45,
+            waterSensorTemperatureShutoffLimit=36,
+        )
+        assert subject.has_water_sensors
+        assert subject.sensor_humidity_alert_percent == 75
+        assert subject.sensor_humidity_shutoff_percent == 95
+        assert subject.sensor_temp_alert_f == 45
+        assert subject.sensor_temp_shutoff_f == 36
+
+    def test_a_valve_without_sensors(self):
+        assert valve().has_water_sensors is False
+        assert valve().sensor_humidity_alert_percent is None
+
     def test_site_metadata_is_exposed(self):
         subject = valve(networkName="Riverside", valveAddress="12 Example Lane")
         assert subject.network_name == "Riverside"

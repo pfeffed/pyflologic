@@ -378,23 +378,42 @@ class FloLogicClient:
             return
 
     def _merge_valves(self, payloads: Iterable[Any]) -> None:
-        """Update cached valves from pushed data and notify listeners.
+        """Fold pushed valve data into the cache and notify listeners.
 
-        Updates are merged per valve rather than replacing the whole map: a
-        ``ValveSent`` push carries one valve, and dropping the others would
-        make every other valve on the account vanish.
+        Merging happens at two levels, and both matter:
+
+        - Across valves, because a ``ValveSent`` push carries a single valve.
+          Replacing the whole map would make every other valve vanish.
+        - Within a valve, because a pushed payload is not the same shape as
+          the one ``RefreshValveArray`` returns. A real push was observed
+          nulling ``valveFriendlyName`` and rewriting ``combinedName``, so
+          overwriting the cached payload wholesale loses detail the push was
+          never trying to change.
+
+        Nulls in a push are treated as "not included" rather than "cleared".
+        That is the pragmatic reading: the valve that nulled its friendly name
+        mid-session plainly still had one, and letting the null through would
+        rename the device to its hex ID until the next full refresh.
         """
         updated = False
         for payload in payloads:
             if not isinstance(payload, dict):
                 continue
-            valve = Valve(payload)
-            if not valve.valve_id:
+            valve_id = str(payload.get("id", ""))
+            if not valve_id:
                 continue
-            self._valves[valve.valve_id] = valve
+            self._valves[valve_id] = self._merged_valve(valve_id, payload)
             updated = True
         if updated:
             self._notify()
+
+    def _merged_valve(self, valve_id: str, payload: JsonDict) -> Valve:
+        """Return the cached valve updated with everything the push carried."""
+        cached = self._valves.get(valve_id)
+        if cached is None:
+            return Valve(payload)
+        present = {key: value for key, value in payload.items() if value is not None}
+        return Valve({**cached.raw, **present})
 
     # --- reads ----------------------------------------------------------
 

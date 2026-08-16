@@ -155,8 +155,8 @@ async def watch(client: FloLogicClient, account: Account, seconds: float) -> Non
     print(f"\n{'=' * 70}")
     print(f"Watching for {seconds:g}s -- run some water now")
     print(f"{'=' * 70}")
-    print("Every changed raw field is printed. Watch for which timestamp")
-    print("field moves when flowState leaves 1 (no flow).\n")
+    print("Every changed raw field is printed, including keys a push drops")
+    print("entirely. Watch which timestamp moves when flowState leaves 1.\n")
 
     previous = {valve_id: dict(valve.raw) for valve_id, valve in account.valves.items()}
     started = asyncio.get_running_loop().time()
@@ -166,9 +166,9 @@ async def watch(client: FloLogicClient, account: Account, seconds: float) -> Non
         for valve_id, valve in updated.valves.items():
             before = previous.get(valve_id, {})
             changes = {
-                key: (before.get(key), value)
-                for key, value in valve.raw.items()
-                if before.get(key) != value
+                key: (before.get(key), valve.raw.get(key))
+                for key in before.keys() | valve.raw.keys()
+                if before.get(key) != valve.raw.get(key)
             }
             previous[valve_id] = dict(valve.raw)
             if not changes:

@@ -181,6 +181,27 @@ class TestPushedUpdates:
         # The gateway was not in the push, so it is still known.
         assert "gw-1" in client.valves
 
+    async def test_push_does_not_drop_fields_it_omits(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # A real push was observed nulling valveFriendlyName and omitting
+        # settings entirely. Overwriting the cached payload wholesale would
+        # lose the flow limit, and with it the shutoff countdown.
+        await hub.push(
+            "ValveSent",
+            {"id": "valve-1", "mode": 1, "flowState": 2, "valveFriendlyName": None},
+        )
+        await _until(lambda: client.get_valve("valve-1").is_water_flowing)
+        merged = client.get_valve("valve-1")
+        assert merged.home_limit_minutes == 30
+        assert merged.name == "Main House"
+
+    async def test_push_can_still_change_a_field(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        await hub.push("ValveSent", {"id": "valve-1", "temperature": 41})
+        await _until(lambda: client.get_valve("valve-1").temperature_f == 41)
+
     async def test_malformed_pushes_are_ignored(
         self, client: FloLogicClient, hub: FakeHub
     ):

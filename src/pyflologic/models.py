@@ -417,6 +417,43 @@ class Valve:
         return _as_float(self.raw.get("noFlowNoticeInterval"))
 
     @property
+    def has_water_sensors(self) -> bool:
+        """Return whether remote water sensors are paired with this valve.
+
+        Only valves with sensors carry the ``waterSensor*`` limits, and they
+        are what arm the humidity and low-temperature sensor shutoff modes.
+        """
+        return any(
+            key in self.raw
+            for key in (
+                "waterSensorHumidityAlertLimit",
+                "waterSensorHumidityShutoffLimit",
+                "waterSensorTemperatureAlertLimit",
+                "waterSensorTemperatureShutoffLimit",
+            )
+        )
+
+    @property
+    def sensor_humidity_alert_percent(self) -> float | None:
+        """Return the humidity that triggers a water-sensor alert."""
+        return _as_enabled_float(self.raw.get("waterSensorHumidityAlertLimit"))
+
+    @property
+    def sensor_humidity_shutoff_percent(self) -> float | None:
+        """Return the humidity that triggers an automatic shutoff."""
+        return _as_enabled_float(self.raw.get("waterSensorHumidityShutoffLimit"))
+
+    @property
+    def sensor_temp_alert_f(self) -> float | None:
+        """Return the water-sensor temperature that triggers an alert."""
+        return _as_enabled_float(self.raw.get("waterSensorTemperatureAlertLimit"))
+
+    @property
+    def sensor_temp_shutoff_f(self) -> float | None:
+        """Return the water-sensor temperature that triggers a shutoff."""
+        return _as_enabled_float(self.raw.get("waterSensorTemperatureShutoffLimit"))
+
+    @property
     def current_flow_limit_minutes(self) -> float | None:
         """Return the flow limit that applies in the valve's current mode."""
         limits = {
@@ -433,11 +470,11 @@ class Valve:
     def flow_started_at(self) -> datetime | None:
         """Return when the current flow event began, if water is flowing.
 
-        The field name is model-dependent. Existing reverse engineering used
-        ``lastNewFlow``, but WiFi Connect valves do not send that key at all --
-        they send ``lastFlowChange``. Reading only the first name silently
-        disables every derived timing value on that hardware, so both are
-        tried, most specific first.
+        ``lastNewFlow`` is the right field and is confirmed against live
+        hardware: it moves when a flow event begins and, unlike
+        ``lastFlowChange``, does *not* move again when the water stops. The
+        fallbacks cover models that omit it; both were observed carrying the
+        same value at the moment flow started, so they degrade safely.
         """
         if not self.is_water_flowing:
             return None
