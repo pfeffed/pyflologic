@@ -212,6 +212,15 @@ class TestValveIdentity:
         assert valve(uuid="abc").name == "abc"
         assert valve().name == "FloLogic v1"
 
+    def test_the_name_is_per_account_but_the_unique_id_is_not(self):
+        # One real valve, two logins, same instant: the owner sees "Riverside
+        # Upper Valve" and a shared user sees "Riverside Whole House". Only the
+        # three name fields differ; the other 108 are identical.
+        as_owner = valve(uuid="hw-2245", valveFriendlyName="Riverside Upper Valve")
+        as_shared = valve(uuid="hw-2245", valveFriendlyName="Riverside Whole House")
+        assert as_owner.name != as_shared.name
+        assert as_owner.unique_id == as_shared.unique_id
+
     def test_unique_id_prefers_hardware_uuid(self):
         assert valve(uuid="hw-9").unique_id == "hw-9"
         assert valve().unique_id == "v1"

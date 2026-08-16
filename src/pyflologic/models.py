@@ -194,7 +194,14 @@ class Valve:
 
     @property
     def name(self) -> str:
-        """Return the friendliest name FloLogic has for this valve."""
+        """Return the friendliest name FloLogic has for this valve.
+
+        Scoped to the logged-in account, not to the hardware: the same valve
+        was observed simultaneously named "Riverside Upper Valve" to its owner
+        and "Riverside Whole House" to a shared user. Every other field of that
+        valve's payload was identical between the two. Anything that must
+        survive a change of account should key on :attr:`unique_id`.
+        """
         for key in ("valveFriendlyName", "combinedName", "name"):
             value = self.raw.get(key)
             if value:
@@ -537,10 +544,11 @@ class ValveAccess:
     def valve_name(self) -> str | None:
         """Return the valve's display name as recorded against this access.
 
-        Observed to match the valve's own ``valveFriendlyName`` for both an
-        owner and a shared user, so naming is per-valve rather than per-user.
-        Kept separate anyway, because the field exists in both places and a
-        future divergence would otherwise be invisible.
+        Names are *per user*: one real valve is "Riverside Upper Valve" to its
+        owner and "Riverside Whole House" to a shared user, at the same instant.
+        This field always agrees with the valve's own ``valveFriendlyName`` as
+        returned to the same login, so either can be read -- but neither is a
+        stable identifier. Use :attr:`Valve.unique_id` for that.
         """
         value = self.raw.get("valveFriendlyName")
         return str(value) if value else None
