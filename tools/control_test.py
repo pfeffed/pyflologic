@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import logging
 import sys
 from datetime import UTC, datetime
@@ -161,9 +160,14 @@ async def run(args: argparse.Namespace) -> int:
         deadline = asyncio.get_running_loop().time() + args.observe
         while asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(POLL_SECONDS)
-            with contextlib.suppress(FloLogicError):
+            try:
                 await client.async_refresh()
-                timeline.observe(client.account, "poll")
+            except FloLogicError as err:
+                # Never silent: a swallowed poll makes "the cloud reported
+                # nothing" impossible to tell from "we never asked".
+                print(f"    [poll failed: {err}]")
+                continue
+            timeline.observe(client.account, "poll")
 
         unsubscribe()
         print(f"\n--- observation finished ({len(timeline.entries)} changes) ---")

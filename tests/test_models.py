@@ -110,6 +110,27 @@ class TestValveStatus:
             if flag.name:
                 assert valve(mode=int(flag)).status != "unknown", flag.name
 
+    def test_an_autonomous_flow_time_shutoff(self):
+        # Captured live: a valve in AWAY with a 30-second flow limit shut
+        # itself off and reported mode 40 == SHUTOFF | FLOW_TIME_EXCEEDED.
+        # This is the whole reason the device exists, so pin every derived
+        # value it produces.
+        subject = valve(mode=40, flowState=1, awayIntervalTime=0.5)
+        assert subject.mode.flag_names == ["SHUTOFF", "FLOW_TIME_EXCEEDED"]
+        assert subject.status == "flow_time_exceeded"
+        assert subject.control_mode is ControlMode.SHUTOFF
+        assert subject.active_water_off_flags == [
+            ValveMode.FLOW_TIME_EXCEEDED,
+            ValveMode.SHUTOFF,
+        ]
+        assert subject.active_warning_flags == []
+        assert subject.active_critical_flags == []
+
+    def test_recovery_from_a_flow_time_shutoff(self):
+        # Commanding HOME clears both bits; there is no separate reset.
+        assert valve(mode=1).status == "home"
+        assert valve(mode=1).active_water_off_flags == []
+
     def test_grouped_flags(self):
         subject = valve(
             mode=ValveMode.AWAY | ValveMode.SENSOR_LEAK | ValveMode.CHANGE_BATTERY
@@ -139,9 +160,10 @@ class TestFlowState:
         assert valve(flowState=99).is_water_flowing is False
 
     def test_flow_and_shutoff_are_not_mutually_exclusive(self):
-        # Observed live: a valve watched physically closing reported flowState
-        # 4 for several seconds while its mode was already SHUTOFF. Nothing
-        # should assume a shut valve cannot report flow.
+        # Observed live: a valve watched closing reported flowState 4 for
+        # several seconds while its mode was already SHUTOFF. Confirmed to be
+        # downstream pipes draining, not a lagging mechanism. Nothing should
+        # assume a shut valve cannot report flow.
         subject = valve(mode=int(ValveMode.SHUTOFF), flowState=4)
         assert subject.control_mode is ControlMode.SHUTOFF
         assert subject.is_water_flowing is True

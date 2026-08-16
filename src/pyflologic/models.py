@@ -327,11 +327,14 @@ class Valve:
         """Return whether the valve currently reports water moving through it.
 
         This is the sensor's word, and it is *not* mutually exclusive with the
-        valve being shut. A valve watched physically closing reported flow for
-        about four seconds afterwards, with the household drawing water at the
-        time; whether that was the line draining or the close still completing
-        was not established. Treat "flowing while shut" as unremarkable for a
-        few seconds after a shutoff, and as worth investigating if it persists.
+        valve being shut: a valve watched closing reported flow for several
+        seconds afterwards. That was confirmed by direct observation to be the
+        pipes draining downstream, not the mechanism lagging -- an observer at
+        a lower-floor tap saw pressure fall away and then trickle out while the
+        valve had already closed promptly.
+
+        So a brief "flowing while shut" after a shutoff is drainage and is
+        expected. One that persists is not, and is worth surfacing.
         """
         state = self.flow_state
         return self.is_online and state is not None and state in FLOWING_STATES
