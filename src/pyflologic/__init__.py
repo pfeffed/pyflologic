@@ -35,6 +35,7 @@ from .enums import (
     ControlMode,
     FlowState,
     NotificationSetting,
+    ToggledSettingName,
     ValveMode,
 )
 from .exceptions import (
@@ -83,6 +84,7 @@ __all__ = [
     "NotificationSetting",
     "SchedulerEvent",
     "ToggledSetting",
+    "ToggledSettingName",
     "UnknownValveError",
     "User",
     "Valve",

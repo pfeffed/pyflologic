@@ -16,6 +16,7 @@ from pyflologic import (
     FloLogicCommandError,
     FloLogicError,
     NotificationSetting,
+    ToggledSettingName,
     UnknownValveError,
     ValveMode,
 )
@@ -527,3 +528,68 @@ async def _until(predicate: Callable[[], bool], timeout: float = 1.0, **_: Any) 
             return
         await asyncio.sleep(0.01)
     pytest.fail("condition was never met")
+
+
+class TestToggledSettings:
+    """Writing the settings whose sign is their on/off switch."""
+
+    async def test_disabling_keeps_the_configured_value(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # This is what the app does: Auto Away switched off still shows
+        # "18 hours". Writing a zero would lose it.
+        hub.valve("valve-1")["autoAwayTime"] = 18
+        await client.async_refresh()
+        await client.async_set_toggled_setting("valve-1", "auto_away", enabled=False)
+        assert hub.valve("valve-1")["autoAwayTime"] == -18
+
+    async def test_enabling_restores_the_sign(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.valve("valve-1")["autoAwayTime"] = -18
+        await client.async_refresh()
+        await client.async_set_toggled_setting("valve-1", "auto_away", enabled=True)
+        assert hub.valve("valve-1")["autoAwayTime"] == 18
+
+    async def test_changing_the_value_preserves_the_switch(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.valve("valve-1")["autoAwayTime"] = -18
+        await client.async_refresh()
+        await client.async_set_toggled_setting("valve-1", "auto_away", value=24)
+        # Still off, now at 24 hours.
+        assert hub.valve("valve-1")["autoAwayTime"] == -24
+
+    async def test_a_negative_value_is_read_as_a_magnitude(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # The sign is carried by `enabled`, so a caller passing -24 means 24.
+        hub.valve("valve-1")["autoAwayTime"] = 18
+        await client.async_refresh()
+        await client.async_set_toggled_setting("valve-1", "auto_away", value=-24)
+        assert hub.valve("valve-1")["autoAwayTime"] == 24
+
+    async def test_setting_both_halves_at_once(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        await client.async_set_toggled_setting(
+            "valve-1", ToggledSettingName.LOW_TEMP_SHUTOFF, enabled=True, value=36
+        )
+        assert hub.valve("valve-1")["lowTemperatureLimit"] == 36
+
+    async def test_a_setting_with_no_value_needs_one(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.valve("valve-1")["autoAwayTime"] = 0
+        await client.async_refresh()
+        with pytest.raises(FloLogicError, match="supply one"):
+            await client.async_set_toggled_setting("valve-1", "auto_away", enabled=True)
+
+    async def test_an_unknown_setting_name_raises(self, client: FloLogicClient):
+        with pytest.raises(ValueError, match="not a valid ToggledSettingName"):
+            await client.async_set_toggled_setting("valve-1", "nonsense", enabled=True)
+
+    async def test_every_named_setting_maps_to_a_field(self):
+        # A name without a wire field would fail only when someone tried to
+        # write it, which for a temperature shutoff is a bad time to find out.
+        assert set(client_module._TOGGLED_FIELDS) == set(ToggledSettingName)

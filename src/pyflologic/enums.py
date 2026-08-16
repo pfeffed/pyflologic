@@ -20,6 +20,7 @@ __all__ = [
     "ControlMode",
     "FlowState",
     "NotificationSetting",
+    "ToggledSettingName",
     "ValveMode",
 ]
 
@@ -87,6 +88,22 @@ class ValveMode(IntFlag, boundary=KEEP):
     def unknown_bits(self) -> int:
         """Return the raw value of any bits this library does not recognize."""
         return _unrecognized_bits(ValveMode, self)
+
+
+class ToggledSettingName(StrEnum):
+    """The settings FloLogic switches off by negating rather than clearing.
+
+    Each maps to a :class:`~pyflologic.models.ToggledSetting` on the valve and
+    to one signed field on the wire, so writing one means choosing a sign as
+    well as a magnitude.
+    """
+
+    AUTO_AWAY = "auto_away"
+    DELAY_AWAY = "delay_away"
+    WINTER_FLOW_SENSITIVITY = "winter_flow_sensitivity"
+    GUEST_MODE = "guest_mode"
+    LOW_TEMP_ALERT = "low_temp_alert"
+    LOW_TEMP_SHUTOFF = "low_temp_shutoff"
 
 
 class ControlMode(StrEnum):

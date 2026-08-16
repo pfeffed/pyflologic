@@ -40,7 +40,7 @@ from .const import (
     OS_PLATFORM,
     STATE_CHANGE_TIMEOUT,
 )
-from .enums import ControlMode
+from .enums import ControlMode, ToggledSettingName
 from .exceptions import (
     FloLogicAuthError,
     FloLogicCommandError,
@@ -88,6 +88,15 @@ _SETTING_FIELDS: dict[str, str] = {
     "low_temp_shutoff_f": "lowTemperatureLimit",
     "pre_alert_minutes": "preAlertNoticeInterval",
     "no_flow_notice_seconds": "noFlowNoticeInterval",
+}
+
+_TOGGLED_FIELDS: dict[ToggledSettingName, str] = {
+    ToggledSettingName.AUTO_AWAY: "autoAwayTime",
+    ToggledSettingName.DELAY_AWAY: "delayAwayIntervalTime",
+    ToggledSettingName.WINTER_FLOW_SENSITIVITY: "winterModeTime",
+    ToggledSettingName.GUEST_MODE: "guestModeTime",
+    ToggledSettingName.LOW_TEMP_ALERT: "lowTemperatureAlert",
+    ToggledSettingName.LOW_TEMP_SHUTOFF: "lowTemperatureLimit",
 }
 
 
@@ -558,6 +567,41 @@ class FloLogicClient:
         if not fields:
             raise FloLogicError("no settings were supplied to update")
         await self.async_send_command(valve_id, fields, refresh=refresh)
+
+    async def async_set_toggled_setting(
+        self,
+        valve_id: str,
+        setting: ToggledSettingName | str,
+        *,
+        enabled: bool | None = None,
+        value: float | None = None,
+    ) -> None:
+        """Switch a sign-encoded setting on or off, or change its value.
+
+        FloLogic stores these as one signed number: the sign is the switch and
+        the magnitude is the value. Writing only half of that is not possible
+        on the wire, so whichever half is not supplied is read from the valve's
+        current state and preserved -- turning Auto Away off keeps its 18
+        hours, exactly as the app does.
+
+        Raises if there is no value to write and none is supplied, rather than
+        inventing one: a zero would read back as "not configured" and quietly
+        lose whatever the user had set.
+        """
+        name = ToggledSettingName(setting)
+        valve = self.get_valve(valve_id)
+        current = getattr(valve, name.value)
+
+        target_enabled = current.enabled if enabled is None else enabled
+        magnitude = current.configured if value is None else abs(value)
+        if magnitude is None:
+            raise FloLogicError(
+                f"{name.value} has no configured value on valve {valve_id}; "
+                "supply one to set it"
+            )
+
+        signed = magnitude if target_enabled else -magnitude
+        await self.async_send_command(valve_id, {_TOGGLED_FIELDS[name]: signed})
 
     async def async_send_command(
         self,
