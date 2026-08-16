@@ -17,3 +17,4 @@ htmlcov/
 captures/
 *.png
 !logo.png
+.pyflologic-devices.json

@@ -5,9 +5,9 @@ The read path has been checked against live hardware; RequestStateChange has
 not. This exercises it on a single valve you name, and restores the mode it
 found afterwards.
 
-    export FLOLOGIC_EMAIL=you@example.com
-    export FLOLOGIC_PASSWORD=...
-    uv run python examples/try_write.py --valve-id 4613
+    uv run python tools/try_write.py --account david --valve-id 4613
+
+Credentials come from .env; see .env.example.
 
 Defaults to `bypass` because it is the reversible mode: it self-reverts after
 the valve's bypass timer even if this script dies partway through. Setting
@@ -20,15 +20,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 
-from pyflologic import (
-    ControlMode,
-    DeviceIdentity,
-    FloLogicClient,
-    FloLogicError,
-)
+from accounts import CredentialError, resolve
+
+from pyflologic import ControlMode, FloLogicClient, FloLogicError
 
 SETTLE_SECONDS = 20.0
 """How long to wait for the cloud to report the valve's new mode."""
@@ -36,10 +32,10 @@ SETTLE_SECONDS = 20.0
 
 async def run(args: argparse.Namespace) -> int:
     """Change one valve's mode, observe the result, and restore it."""
-    email = os.environ.get("FLOLOGIC_EMAIL")
-    password = os.environ.get("FLOLOGIC_PASSWORD")
-    if not email or not password:
-        print("Set FLOLOGIC_EMAIL and FLOLOGIC_PASSWORD first.", file=sys.stderr)
+    try:
+        credentials = resolve(args.account)
+    except CredentialError as err:
+        print(err, file=sys.stderr)
         return 2
 
     target = ControlMode(args.mode)
@@ -50,10 +46,11 @@ async def run(args: argparse.Namespace) -> int:
         )
         return 2
 
+    print(f"Account : {credentials.account} ({credentials.email})")
     client = FloLogicClient(
-        email=email,
-        password=password,
-        device=DeviceIdentity.generate("pyflologic-write-test"),
+        email=credentials.email,
+        password=credentials.password,
+        device=credentials.device,
     )
     await client.async_connect()
     try:
@@ -120,6 +117,7 @@ async def run(args: argparse.Namespace) -> int:
 def main() -> int:
     """Parse arguments and run the write test."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--account", help="account name from .env")
     parser.add_argument("--valve-id", required=True, help="valve to test")
     parser.add_argument(
         "--mode",

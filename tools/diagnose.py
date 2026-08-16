@@ -6,9 +6,9 @@ someone else's reverse engineering. This script checks those inferences against
 real hardware: it prints the decoded view of each valve next to the raw fields,
 and calls out any field the library does not map.
 
-    export FLOLOGIC_EMAIL=you@example.com
-    export FLOLOGIC_PASSWORD=...
-    uv run python examples/diagnose.py
+    uv run python tools/diagnose.py --account david
+
+Credentials come from .env; see .env.example.
 
 Read-only: it never sends a command. Pass --watch to keep the connection open
 and print pushed updates as they arrive, which is the way to confirm that
@@ -20,13 +20,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 import sys
 from typing import Any
 
+from accounts import CredentialError, resolve
+
 from pyflologic import (
     Account,
-    DeviceIdentity,
     FloLogicClient,
     FloLogicError,
     NotificationSetting,
@@ -204,6 +204,7 @@ async def main() -> int:
         metavar="SECONDS",
         help="stay connected this long and print pushed updates",
     )
+    parser.add_argument("--account", help="account name from .env")
     parser.add_argument("--debug", action="store_true", help="log protocol frames")
     args = parser.parse_args()
 
@@ -212,16 +213,17 @@ async def main() -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
 
-    email = os.environ.get("FLOLOGIC_EMAIL")
-    password = os.environ.get("FLOLOGIC_PASSWORD")
-    if not email or not password:
-        print("Set FLOLOGIC_EMAIL and FLOLOGIC_PASSWORD first.", file=sys.stderr)
+    try:
+        credentials = resolve(args.account)
+    except CredentialError as err:
+        print(err, file=sys.stderr)
         return 2
+    print(f"Using account: {credentials.account} ({credentials.email})")
 
     client = FloLogicClient(
-        email=email,
-        password=password,
-        device=DeviceIdentity.generate("pyflologic-diagnose"),
+        email=credentials.email,
+        password=credentials.password,
+        device=credentials.device,
     )
 
     try:

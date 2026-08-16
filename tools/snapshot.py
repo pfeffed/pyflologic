@@ -5,9 +5,9 @@ Pairs with tools/uidump.sh: run both at the same moment and you have the API's
 view and the app's view of the same instant, which is how the mode bitfield
 and the settings units get validated.
 
-    uv run python tools/snapshot.py                    # print a summary
-    uv run python tools/snapshot.py -o before.json     # also dump raw payloads
-    uv run python tools/snapshot.py --diff before.json # what changed since
+    uv run python tools/snapshot.py --account david
+    uv run python tools/snapshot.py --account david -o before.snapshot.json
+    uv run python tools/snapshot.py --account david --diff before.snapshot.json
 
 Read-only. Raw dumps contain the account's address and policy details, so they
 are gitignored -- keep them local.
@@ -18,13 +18,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pyflologic import DeviceIdentity, FloLogicClient, FloLogicError
+from accounts import CredentialError, resolve
+
+from pyflologic import FloLogicClient, FloLogicError
 
 
 def summarize(valve: Any) -> str:
@@ -61,16 +62,16 @@ def diff_snapshots(old: dict[str, Any], new: dict[str, Any]) -> None:
 
 async def run(args: argparse.Namespace) -> int:
     """Capture a snapshot and optionally diff it against an earlier one."""
-    email = os.environ.get("FLOLOGIC_EMAIL")
-    password = os.environ.get("FLOLOGIC_PASSWORD")
-    if not email or not password:
-        print("Set FLOLOGIC_EMAIL and FLOLOGIC_PASSWORD first.", file=sys.stderr)
+    try:
+        credentials = resolve(args.account)
+    except CredentialError as err:
+        print(err, file=sys.stderr)
         return 2
 
     client = FloLogicClient(
-        email=email,
-        password=password,
-        device=DeviceIdentity.generate("pyflologic-snapshot"),
+        email=credentials.email,
+        password=credentials.password,
+        device=credentials.device,
     )
     async with client:
         captured_at = datetime.now(UTC).isoformat()
@@ -80,7 +81,7 @@ async def run(args: argparse.Namespace) -> int:
                 valve_id: valve.raw for valve_id, valve in client.valves.items()
             },
         }
-        print(f"captured_at {captured_at}")
+        print(f"account {credentials.account}  captured_at {captured_at}")
         for valve in client.valves.values():
             print(summarize(valve))
 
@@ -98,6 +99,7 @@ async def run(args: argparse.Namespace) -> int:
 def main() -> int:
     """Parse arguments and capture the snapshot."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--account", help="account name from .env")
     parser.add_argument("-o", "--output", help="write raw payloads to this file")
     parser.add_argument("--diff", help="diff against a previously written file")
     try:
