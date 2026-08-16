@@ -641,7 +641,16 @@ class FloLogicClient:
     # --- internals ------------------------------------------------------
 
     async def _async_ready(self) -> SignalRConnection:
-        """Return a live connection, connecting first if necessary."""
+        """Return a live connection, connecting first if necessary.
+
+        Refuses to open one after :meth:`async_disconnect`. Without that, an
+        operation still in flight during shutdown reconnects on its way out
+        and strands a live socket that goes on pinging forever -- the shape
+        this takes downstream is an integration that leaks a connection every
+        time it is reloaded mid-command.
+        """
+        if self._shutdown.is_set():
+            raise FloLogicConnectionError("client has been disconnected")
         if self.connected and self._connection is not None and self._user is not None:
             return self._connection
         async with self._connect_lock:
