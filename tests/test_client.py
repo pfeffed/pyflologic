@@ -141,6 +141,51 @@ class TestCommands:
         await client.async_send_command("valve-1", {"someFutureField": 7})
         assert hub.valve("valve-1")["someFutureField"] == 7
 
+    async def test_a_command_is_confirmed_by_the_valve_not_the_server(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # The hub never sends StateChangeResult. Waiting for it made every
+        # real command appear to time out while in fact succeeding, so the
+        # acknowledgement is the valve reporting the new state.
+        hub.state_push_delay = 0.2
+        await client.async_set_mode("valve-1", ControlMode.SHUTOFF)
+        assert client.get_valve("valve-1").control_mode is ControlMode.SHUTOFF
+        assert not hub.invocations("RefreshValveArray")[1:]
+
+    async def test_a_no_op_command_returns_at_once(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # A command that changes nothing produces no push, so anything waiting
+        # on confirmation would hang for the full timeout.
+        assert client.get_valve("valve-1").control_mode is ControlMode.HOME
+        await asyncio.wait_for(
+            client.async_set_mode("valve-1", ControlMode.HOME), timeout=2
+        )
+        assert not hub.invocations("RequestStateChange")
+
+    async def test_a_lost_push_falls_back_to_a_refresh(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.suppress_state_push = True
+        await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=1)
+        assert client.get_valve("valve-1").control_mode is ControlMode.AWAY
+
+    async def test_a_command_that_never_lands_raises(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.silent_targets = {"RequestStateChange"}
+        with pytest.raises(FloLogicCommandError, match="did not report"):
+            await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=1)
+
+    async def test_verification_can_be_skipped(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.silent_targets = {"RequestStateChange"}
+        await client.async_send_command("valve-1", {"someOddField": 1}, verify=False)
+        # Nothing is awaited without verification, so the frame may still be
+        # in flight when this returns -- that is the point of verify=False.
+        await _until(lambda: bool(hub.invocations("RequestStateChange")))
+
     async def test_a_rejected_command_raises(
         self, client: FloLogicClient, hub: FakeHub
     ):

@@ -7,6 +7,7 @@ of a mocked-out client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -97,6 +98,8 @@ class FakeHub:
         self.connection_count = 0
         self.pings_received = 0
         self.url = ""  # filled in by the fixture once the server is up
+        self.suppress_state_push = False  # simulate a lost acknowledgement
+        self.state_push_delay = 0.0
 
         self.app = web.Application()
         self.app.router.add_post("/signalr/negotiate", self._handle_negotiate)
@@ -232,17 +235,35 @@ class FakeHub:
     async def _apply_state_change(
         self, socket: web.WebSocketResponse, arguments: list[Any]
     ) -> None:
-        """Mutate the stored valve the way the real cloud would, then confirm."""
+        """Apply a command the way the real cloud does.
+
+        Deliberately does *not* send StateChangeResult. Tracing a real hub
+        across several successful mode changes showed that event is never sent:
+        the acknowledgement is a ValveSent push carrying the updated valve. A
+        fake that answered politely would hide exactly the bug that made every
+        real command appear to time out while in fact succeeding.
+
+        It also mirrors the real hub's silence when a command changes nothing
+        -- no state change, no push.
+        """
         command = arguments[2] if len(arguments) > 2 else {}
         valve_id = command.get("valveId")
         stored = next((valve for valve in self.valves if valve["id"] == valve_id), None)
         if stored is None:
-            await self._send(socket, "StateChangeResult", {"success": False})
+            await self._send(socket, "ErrorOccured", "Unknown valve")
             return
+
+        changed = False
         for key, value in command.items():
-            if key not in ("active", "created", "userId", "valveId"):
+            if key in ("active", "created", "userId", "valveId"):
+                continue
+            if stored.get(key) != value:
                 stored[key] = value
-        await self._send(socket, "StateChangeResult", {"success": True})
+                changed = True
+
+        if changed and not self.suppress_state_push:
+            await asyncio.sleep(self.state_push_delay)
+            await self._send(socket, "ValveSent", stored)
 
     async def _send(
         self, socket: web.WebSocketResponse, target: str, *arguments: Any

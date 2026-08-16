@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import logging
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -207,11 +208,19 @@ def main() -> int:
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation")
     parser.add_argument(
+        "--debug", action="store_true", help="log every hub event received"
+    )
+    parser.add_argument(
         "--i-understand-this-closes-the-water",
         action="store_true",
         help="required to send shutoff",
     )
     args = parser.parse_args()
+    if args.debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(relativeCreated)8.0fms %(levelname)-5s %(message)s",
+        )
     try:
         return asyncio.run(run(args))
     except KeyboardInterrupt:

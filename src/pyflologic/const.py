@@ -43,6 +43,14 @@ EVENT_LOGGED_IN = "LoggedIn"
 EVENT_VALVE_SENT = "ValveSent"
 EVENT_VALVE_ARRAY_SENT = "ValveArraySent"
 EVENT_STATE_CHANGE_RESULT = "StateChangeResult"
+"""Named by the hub's API but never actually sent.
+
+Tracing every frame across several successful mode changes showed the hub
+answering ``RequestStateChange`` with nothing at all; the acknowledgement is a
+``ValveSent`` push carrying the updated valve, about a second later. Waiting on
+this event means every command appears to time out while in fact succeeding.
+Kept here so the next person does not rediscover it the same way.
+"""
 EVENT_USER_ACCESSES_SENT = "UserAccessesSent"
 EVENT_SCHEDULER_EVENTS_SENT = "SchedulerEventsSent"
 EVENT_NOTIFICATIONS_HISTORY_SENT = "NotificationsHistorySent"

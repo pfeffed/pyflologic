@@ -328,6 +328,15 @@ class SignalRConnection:
         if not isinstance(arguments, list):
             arguments = []
 
+        # Every hub event, named. Without this there is no way to tell "the
+        # server sent nothing" from "the server sent something we ignored".
+        _LOGGER.debug(
+            "FloLogic event %s (%d args) while awaiting %s",
+            target,
+            len(arguments),
+            self._waiter_event or "-",
+        )
+
         # A frame that answered a pending request belongs to that request. Only
         # genuinely unsolicited events reach the listener, so callers can treat
         # `on_event` as "the hub told us something we did not ask for".

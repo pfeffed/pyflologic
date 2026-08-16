@@ -27,7 +27,6 @@ from .const import (
     EVENT_LOGGED_IN,
     EVENT_NOTIFICATIONS_HISTORY_SENT,
     EVENT_SCHEDULER_EVENTS_SENT,
-    EVENT_STATE_CHANGE_RESULT,
     EVENT_USER_ACCESSES_SENT,
     EVENT_VALVE_ARRAY_SENT,
     EVENT_VALVE_SENT,
@@ -72,6 +71,12 @@ after a long cloud outage is worse than one that keeps trying.
 """
 
 ListenerCallback = Callable[[Account], None]
+
+_COMMAND_POLL_SECONDS = 0.25
+"""How often to check whether the valve has reported a commanded change."""
+
+_NUMERIC_TOLERANCE = 1e-6
+"""FloLogic returns 4 where 4.0 was sent; that is not a disagreement."""
 
 _SETTING_FIELDS: dict[str, str] = {
     "flow_sensitivity_oz_per_min": "dripRate",
@@ -135,6 +140,7 @@ class FloLogicClient:
         self._valves: dict[str, Valve] = {}
         self._accesses: dict[str, ValveAccess] = {}
         self._listeners: list[ListenerCallback] = []
+        self._last_error: list[Any] | None = None
 
     # --- properties -----------------------------------------------------
 
@@ -377,6 +383,7 @@ class FloLogicClient:
         """Fold unsolicited hub events into the local cache."""
         if target == EVENT_ERROR:
             _LOGGER.warning("FloLogic reported an error: %s", arguments)
+            self._last_error = arguments
             return
         if target == EVENT_VALVE_SENT and arguments:
             if isinstance(arguments[0], dict):
@@ -496,7 +503,8 @@ class FloLogicClient:
         valve_id: str,
         mode: ControlMode | str,
         *,
-        refresh: bool = True,
+        refresh: bool = False,
+        timeout: float = STATE_CHANGE_TIMEOUT,
     ) -> None:
         """Put one valve into a control mode.
 
@@ -505,7 +513,10 @@ class FloLogicClient:
         """
         control_mode = ControlMode(mode)
         await self.async_send_command(
-            valve_id, {"mode": int(control_mode.flag)}, refresh=refresh
+            valve_id,
+            {"mode": int(control_mode.flag)},
+            refresh=refresh,
+            timeout=timeout,
         )
 
     async def async_update_settings(
@@ -521,7 +532,7 @@ class FloLogicClient:
         low_temp_shutoff_f: float | None = None,
         pre_alert_minutes: float | None = None,
         no_flow_notice_seconds: float | None = None,
-        refresh: bool = True,
+        refresh: bool = False,
     ) -> None:
         """Change one or more of a valve's settings in a single command.
 
@@ -553,7 +564,8 @@ class FloLogicClient:
         valve_id: str,
         fields: JsonDict,
         *,
-        refresh: bool = True,
+        refresh: bool = False,
+        verify: bool = True,
         timeout: float = STATE_CHANGE_TIMEOUT,
     ) -> None:
         """Send a raw state-change command for one valve.
@@ -561,10 +573,21 @@ class FloLogicClient:
         The escape hatch for FloLogic fields this library has not modeled. Use
         :meth:`async_set_mode` or :meth:`async_update_settings` when they cover
         what you need.
+
+        Returns once the valve reports the requested fields. Pass
+        ``verify=False`` for a field the valve normalizes rather than echoing
+        back, which would otherwise never appear to confirm.
         """
         valve = self.get_valve(valve_id)
         connection = await self._async_ready()
         assert self._user is not None
+
+        if verify and _fields_match(valve.raw, fields):
+            # Already there. FloLogic pushes nothing when a command changes
+            # nothing, so waiting for confirmation would hang for the full
+            # timeout on what is really a no-op.
+            return
+
         command = {
             "active": True,
             "created": datetime.now(UTC).isoformat(),
@@ -572,18 +595,48 @@ class FloLogicClient:
             "valveId": valve.raw.get("id"),
             **fields,
         }
-        arguments = await connection.async_request(
-            METHOD_REQUEST_STATE_CHANGE,
-            EVENT_STATE_CHANGE_RESULT,
-            self._user.raw,
-            valve.raw,
-            command,
-            timeout=timeout,
-            error_event=EVENT_ERROR,
+        self._last_error = None
+        await connection.async_send(
+            METHOD_REQUEST_STATE_CHANGE, self._user.raw, valve.raw, command
         )
-        _raise_for_command_result(arguments)
+        if verify:
+            await self._async_await_command(valve_id, fields, timeout)
         if refresh:
             await self.async_refresh()
+
+    async def _async_await_command(
+        self, valve_id: str, fields: JsonDict, timeout: float
+    ) -> None:
+        """Wait until the valve itself reports the change, or give up.
+
+        FloLogic never sends the ``StateChangeResult`` event its hub method
+        implies -- confirmed by tracing every frame across several successful
+        commands. What it does send is a ``ValveSent`` push carrying the
+        updated valve, typically inside a second. So the valve's own state is
+        the acknowledgement, which is the better thing to wait on anyway: it
+        answers "did the valve do it" rather than "did the server accept it".
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            await asyncio.sleep(_COMMAND_POLL_SECONDS)
+            cached = self._valves.get(valve_id)
+            if cached is not None and _fields_match(cached.raw, fields):
+                return
+            if self._last_error is not None:
+                raise FloLogicCommandError(
+                    f"FloLogic reported an error: {self._last_error}"
+                )
+
+        # No push arrived. Ask directly before deciding it failed.
+        with suppress(FloLogicError):
+            await self.async_refresh()
+        cached = self._valves.get(valve_id)
+        if cached is not None and _fields_match(cached.raw, fields):
+            return
+        raise FloLogicCommandError(
+            f"valve {valve_id} did not report {fields} within {timeout:g}s"
+        )
 
     # --- internals ------------------------------------------------------
 
@@ -618,25 +671,23 @@ def _index_valves(payload: Iterable[Any]) -> dict[str, Valve]:
     return valves
 
 
-def _raise_for_command_result(arguments: list[Any]) -> None:
-    """Raise if the hub's state-change result clearly reports a failure.
-
-    FloLogic's result shape is not documented, so this only rejects results
-    that say so explicitly. An unrecognized result is treated as success --
-    the alternative would be failing valid commands on unfamiliar firmware.
-    """
-    payload = arguments[0] if arguments else None
-    if not isinstance(payload, dict):
-        return
-    for key in ("success", "isSuccess", "succeeded"):
-        if key in payload and payload[key] is False:
-            message = payload.get("message") or payload.get("errorMessage")
-            raise FloLogicCommandError(
-                f"FloLogic rejected the command: {message or payload}"
-            )
-    for key in ("error", "errorMessage"):
-        if payload.get(key):
-            raise FloLogicCommandError(f"FloLogic rejected the command: {payload[key]}")
-
-
 __all__ = ["DEFAULT_REQUEST_TIMEOUT", "FloLogicClient", "ListenerCallback"]
+
+
+def _fields_match(raw: JsonDict, fields: JsonDict) -> bool:
+    """Return whether a valve payload already reflects every requested field.
+
+    Numbers are compared numerically: FloLogic is inconsistent about returning
+    ``4`` where ``4.0`` was sent, and a type mismatch is not a disagreement.
+    """
+    for key, expected in fields.items():
+        actual = raw.get(key)
+        if isinstance(expected, bool) or isinstance(actual, bool):
+            if actual is not expected:
+                return False
+        elif isinstance(expected, int | float) and isinstance(actual, int | float):
+            if abs(float(actual) - float(expected)) > _NUMERIC_TOLERANCE:
+                return False
+        elif actual != expected:
+            return False
+    return True
