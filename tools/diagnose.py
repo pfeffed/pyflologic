@@ -30,6 +30,7 @@ from pyflologic import (
     FloLogicClient,
     FloLogicError,
     NotificationSetting,
+    ToggledSetting,
 )
 
 # Raw valve fields this library exposes through a typed property. Anything else
@@ -68,6 +69,13 @@ MAPPED_FIELDS = {
     "networkName",
     "valveAddress",
     "delayAwayIntervalTime",
+    "winterModeTime",
+    "guestModeTime",
+    "temperatureOffset",
+    "waterSensorHumidityAlertLimit",
+    "waterSensorHumidityShutoffLimit",
+    "waterSensorTemperatureAlertLimit",
+    "waterSensorTemperatureShutoffLimit",
     "isSensor",
     "isZRepeater",
     "isZInput",
@@ -120,9 +128,19 @@ def describe_valve(valve: Any) -> None:
     print(f"  home limit       : {valve.home_limit_minutes} min")
     print(f"  away limit       : {valve.away_limit_minutes} min")
     print(f"  bypass time      : {valve.bypass_minutes} min")
-    print(f"  auto away        : {valve.auto_away_hours} h")
-    print(f"  low temp alert   : {valve.low_temp_alert_f} F")
-    print(f"  low temp shutoff : {valve.low_temp_shutoff_f} F")
+
+    def toggled(setting: ToggledSetting, unit: str) -> str:
+        """Render a signed setting the way the app does: a switch and a value."""
+        state = "on " if setting.enabled else "off"
+        return f"{state} @ {setting.configured} {unit}"
+
+    print(f"  auto away        : {toggled(valve.auto_away, 'h')}")
+    print(f"  delay away       : {toggled(valve.delay_away, 'min')}")
+    print(f"  winter sensitivity: {toggled(valve.winter_flow_sensitivity, 'oz/min')}")
+    print(f"  guest mode       : {toggled(valve.guest_mode, '')}")
+    print(f"  low temp alert   : {toggled(valve.low_temp_alert, 'F')}")
+    print(f"  low temp shutoff : {toggled(valve.low_temp_shutoff, 'F')}")
+    print(f"  temp offset      : {valve.temperature_offset_f} F")
     print(f"  pre-alert        : {valve.pre_alert_minutes} min")
     print("  --- derived ---")
     print(f"  flow started     : {valve.flow_started_at}")

@@ -168,6 +168,12 @@ STATUS_PRIORITY: tuple[ValveMode, ...] = (
     ValveMode.HUMIDITY_SENSOR_SHUTOFF,
     ValveMode.LOW_TEMP_SENSOR_SHUTOFF,
     ValveMode.SHUTOFF,
+    # Override outranks the ordinary modes: an irrigation controller signalling
+    # OVERRIDE replaces the mode outright (a real valve reported mode == 2048
+    # with no HOME bit) and suspends the flow limit, which is why the app shows
+    # "Override" with elapsed time but no shutoff countdown.
+    ValveMode.EXTERNAL_OVERRIDE,
+    ValveMode.OVERRIDE,
     ValveMode.DELAY_AWAY,
     ValveMode.AUTO_AWAY,
     ValveMode.EXTERNAL_AWAY,
@@ -177,6 +183,13 @@ STATUS_PRIORITY: tuple[ValveMode, ...] = (
     ValveMode.EXTERNAL_HOME,
     ValveMode.HOME,
     ValveMode.DISABLED,
+    # Warnings rank below the operating modes: a valve that is HOME with a low
+    # battery is still meaningfully "home", and the warning surfaces through
+    # `active_warning_flags`. They are listed only so that a warning arriving
+    # on its own does not read as "unknown".
+    ValveMode.LOW_TEMP_ALERT,
+    ValveMode.AC_LOST,
+    ValveMode.CHANGE_BATTERY,
     ValveMode.UPDATING,
     ValveMode.COMMUNICATION_ERROR,
     ValveMode.VALVE_FAILURE,
@@ -184,7 +197,17 @@ STATUS_PRIORITY: tuple[ValveMode, ...] = (
     ValveMode.ERROR,
     ValveMode.UNKNOWN_FAULT,
 )
-"""Bits ordered most- to least-newsworthy, for picking one headline status."""
+"""Bits ordered most- to least-newsworthy, for picking one headline status.
+
+Every named bit must appear here; one that does not silently degrades to
+"unknown", which is how ``OVERRIDE`` went unnoticed until a valve reported it.
+A test enforces the exhaustiveness.
+
+The relative order of the hardware faults at the tail is inherited from earlier
+reverse engineering and has not been checked against the app -- no valve has
+been observed faulted. Consumers that care about faults should read
+:data:`CRITICAL_FLAGS` rather than relying on this ranking.
+"""
 
 
 class FlowState(IntEnum):

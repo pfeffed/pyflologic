@@ -13,6 +13,7 @@ from pyflologic import (
     Notification,
     NotificationSetting,
     SchedulerEvent,
+    ToggledSetting,
     Valve,
     ValveAccess,
     ValveMode,
@@ -86,6 +87,28 @@ class TestValveStatus:
 
     def test_missing_mode_is_unknown(self):
         assert valve().status == "unknown"
+
+    def test_override_is_reported_as_a_status(self):
+        # A real valve driven by an irrigation controller reported mode 2048
+        # with no other bit set. The app calls this "Override"; before this was
+        # in the priority list the library called it "unknown".
+        subject = valve(mode=int(ValveMode.OVERRIDE))
+        assert subject.status == "override"
+        # Override is not something a user can select, so there is no control
+        # mode -- and with no flow limit in force, no countdown either.
+        assert subject.control_mode is None
+        assert subject.current_flow_limit_minutes is None
+
+    def test_a_leak_still_outranks_override(self):
+        subject = valve(mode=ValveMode.OVERRIDE | ValveMode.SENSOR_LEAK)
+        assert subject.status == "sensor_leak"
+
+    def test_every_named_mode_bit_has_a_status(self):
+        # A bit missing from STATUS_PRIORITY silently degrades to "unknown",
+        # which is how the Override gap went unnoticed.
+        for flag in ValveMode:
+            if flag.name:
+                assert valve(mode=int(flag)).status != "unknown", flag.name
 
     def test_grouped_flags(self):
         subject = valve(
@@ -248,14 +271,47 @@ class TestRealHardwareQuirks:
     def test_plausible_battery_level_is_kept(self):
         assert valve(batteryLevel=50).battery_percent == 50
 
-    @pytest.mark.parametrize("raw", [-18, -1, 0, -0.5])
-    def test_negative_settings_read_as_disabled(self, raw):
-        # FloLogic disables a setting with a sentinel, not by omitting it.
-        assert valve(autoAwayTime=raw).auto_away_hours is None
-        assert valve(delayAwayIntervalTime=raw).delay_away_minutes is None
+    @pytest.mark.parametrize("raw", [-18, -1, -0.5])
+    def test_a_negative_setting_is_off_but_keeps_its_value(self, raw):
+        # Confirmed against the app: Auto Away showing an OFF toggle beside
+        # "18 hours" is stored as autoAwayTime = -18. The sign is the switch,
+        # the magnitude is what the user configured.
+        setting = valve(autoAwayTime=raw).auto_away
+        assert setting.enabled is False
+        assert setting.configured == abs(raw)
+        assert setting.effective is None
+        assert not setting
 
-    def test_positive_settings_are_kept(self):
+    def test_a_positive_setting_is_on(self):
+        setting = valve(autoAwayTime=24).auto_away
+        assert setting.enabled is True
+        assert setting.configured == 24
+        assert setting.effective == 24
+        assert setting
         assert valve(autoAwayTime=24).auto_away_hours == 24
+
+    def test_a_disabled_setting_reports_no_effective_hours(self):
+        assert valve(autoAwayTime=-18).auto_away_hours is None
+
+    @pytest.mark.parametrize("raw", [0, None, "nonsense"])
+    def test_a_missing_setting_is_off_with_no_value(self, raw):
+        setting = valve(autoAwayTime=raw).auto_away
+        assert setting.enabled is False
+        assert setting.configured is None
+
+    def test_delay_away_and_winter_mode_use_the_same_encoding(self):
+        subject = valve(delayAwayIntervalTime=-1, winterModeTime=-0.1)
+        assert subject.delay_away == ToggledSetting(enabled=False, configured=1.0)
+        # winterModeTime is misnamed on the wire: the app calls it "Winter Flow
+        # Sensitivity" and shows it in ounces per minute, not as a duration.
+        assert subject.winter_flow_sensitivity.configured == 0.1
+
+    def test_a_low_temperature_limit_of_one_degree_is_a_real_setting(self):
+        # A real valve had both temperature toggles ON at 1 F. Treating a small
+        # positive value as a disabled sentinel would have been wrong.
+        subject = valve(lowTemperatureAlert=1, lowTemperatureLimit=1)
+        assert subject.low_temp_alert.enabled is True
+        assert subject.low_temp_shutoff_f == 1
 
     def test_flow_timestamp_falls_back_to_last_flow_change(self):
         # WiFi Connect valves never send lastNewFlow. Reading only that key
@@ -329,14 +385,14 @@ class TestRealHardwareQuirks:
             waterSensorTemperatureShutoffLimit=36,
         )
         assert subject.has_water_sensors
-        assert subject.sensor_humidity_alert_percent == 75
-        assert subject.sensor_humidity_shutoff_percent == 95
-        assert subject.sensor_temp_alert_f == 45
-        assert subject.sensor_temp_shutoff_f == 36
+        assert subject.sensor_humidity_alert.effective == 75
+        assert subject.sensor_humidity_shutoff.effective == 95
+        assert subject.sensor_temp_alert.effective == 45
+        assert subject.sensor_temp_shutoff.effective == 36
 
     def test_a_valve_without_sensors(self):
         assert valve().has_water_sensors is False
-        assert valve().sensor_humidity_alert_percent is None
+        assert valve().sensor_humidity_alert.configured is None
 
     def test_site_metadata_is_exposed(self):
         subject = valve(networkName="Riverside", valveAddress="12 Example Lane")

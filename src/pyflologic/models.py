@@ -33,6 +33,7 @@ __all__ = [
     "JsonDict",
     "Notification",
     "SchedulerEvent",
+    "ToggledSetting",
     "User",
     "Valve",
     "ValveAccess",
@@ -81,20 +82,6 @@ def _as_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _as_enabled_float(value: Any) -> float | None:
-    """Coerce to ``float``, treating a non-positive value as "not configured".
-
-    FloLogic disables a setting by storing a sentinel rather than omitting it:
-    real accounts carry ``autoAwayTime: -18``, ``delayAwayIntervalTime: -1``
-    and ``winterModeTime: -0.5``. Reporting "-18 hours" would be nonsense, so
-    anything at or below zero reads as ``None``.
-    """
-    parsed = _as_float(value)
-    if parsed is None or parsed <= 0:
-        return None
-    return parsed
-
-
 def _first_datetime(raw: JsonDict, keys: tuple[str, ...]) -> datetime | None:
     """Return the first key in ``keys`` that parses as a timestamp."""
     for key in keys:
@@ -111,6 +98,38 @@ def _now(now: datetime | None) -> datetime:
     directly testable.
     """
     return now if now is not None else datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class ToggledSetting:
+    """A FloLogic setting that packs its on/off state into the sign of its value.
+
+    FloLogic does not clear a disabled setting, it negates it: a valve with
+    Auto Away switched off still reports ``autoAwayTime: -18``, and the app
+    renders that as an off toggle beside "18 hours". Reading only the number
+    gives "-18 hours"; discarding it entirely loses what the user configured.
+    Both halves are kept here, and :attr:`effective` is the one to act on.
+    """
+
+    enabled: bool
+    configured: float | None
+
+    @property
+    def effective(self) -> float | None:
+        """Return the value if the setting is on, otherwise ``None``."""
+        return self.configured if self.enabled else None
+
+    def __bool__(self) -> bool:
+        """Return whether the setting is switched on."""
+        return self.enabled
+
+    @classmethod
+    def parse(cls, value: Any) -> ToggledSetting:
+        """Decode one signed FloLogic setting."""
+        parsed = _as_float(value)
+        if parsed is None or parsed == 0:
+            return cls(enabled=False, configured=None)
+        return cls(enabled=parsed > 0, configured=abs(parsed))
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,28 +409,63 @@ class Valve:
         return _as_float(self.raw.get("bypassTime"))
 
     @property
-    def auto_away_hours(self) -> float | None:
-        """Return the idle time after which the valve switches itself to Away.
-
-        ``None`` when the feature is off; FloLogic stores that as a negative
-        sentinel rather than omitting the field.
-        """
-        return _as_enabled_float(self.raw.get("autoAwayTime"))
+    def auto_away(self) -> ToggledSetting:
+        """Return Auto Away: idle hours before the valve switches itself to Away."""
+        return ToggledSetting.parse(self.raw.get("autoAwayTime"))
 
     @property
-    def delay_away_minutes(self) -> float | None:
-        """Return the Delay Away interval, or ``None`` when it is disabled."""
-        return _as_enabled_float(self.raw.get("delayAwayIntervalTime"))
+    def auto_away_hours(self) -> float | None:
+        """Return the Auto Away delay in hours, or ``None`` when it is off."""
+        return self.auto_away.effective
+
+    @property
+    def delay_away(self) -> ToggledSetting:
+        """Return Delay Away: minutes to wait before Away mode takes effect."""
+        return ToggledSetting.parse(self.raw.get("delayAwayIntervalTime"))
+
+    @property
+    def winter_flow_sensitivity(self) -> ToggledSetting:
+        """Return Winter Mode's alternate flow sensitivity, in ounces per minute.
+
+        Stored in ``winterModeTime``, which is misnamed on the wire: the app
+        labels it "Winter Flow Sensitivity" and shows it in ounces, not time.
+        """
+        return ToggledSetting.parse(self.raw.get("winterModeTime"))
+
+    @property
+    def guest_mode(self) -> ToggledSetting:
+        """Return Guest Mode and its configured duration."""
+        return ToggledSetting.parse(self.raw.get("guestModeTime"))
+
+    @property
+    def low_temp_alert(self) -> ToggledSetting:
+        """Return the low-temperature alert threshold, in degrees Fahrenheit."""
+        return ToggledSetting.parse(self.raw.get("lowTemperatureAlert"))
 
     @property
     def low_temp_alert_f(self) -> float | None:
-        """Return the temperature that triggers a low-temperature alert."""
-        return _as_float(self.raw.get("lowTemperatureAlert"))
+        """Return the low-temperature alert threshold, or ``None`` when off."""
+        return self.low_temp_alert.effective
+
+    @property
+    def low_temp_shutoff(self) -> ToggledSetting:
+        """Return the low-temperature shutoff threshold, in degrees Fahrenheit.
+
+        A real valve was found with this on at 1 F, which is a legitimate if
+        useless setting rather than a disabled sentinel -- the app displays it
+        literally. Nothing here second-guesses the number.
+        """
+        return ToggledSetting.parse(self.raw.get("lowTemperatureLimit"))
 
     @property
     def low_temp_shutoff_f(self) -> float | None:
-        """Return the temperature that triggers an automatic shutoff."""
-        return _as_float(self.raw.get("lowTemperatureLimit"))
+        """Return the low-temperature shutoff threshold, or ``None`` when off."""
+        return self.low_temp_shutoff.effective
+
+    @property
+    def temperature_offset_f(self) -> float | None:
+        """Return the calibration offset applied to the temperature reading."""
+        return _as_float(self.raw.get("temperatureOffset"))
 
     @property
     def pre_alert_minutes(self) -> float | None:
@@ -441,24 +495,24 @@ class Valve:
         )
 
     @property
-    def sensor_humidity_alert_percent(self) -> float | None:
-        """Return the humidity that triggers a water-sensor alert."""
-        return _as_enabled_float(self.raw.get("waterSensorHumidityAlertLimit"))
+    def sensor_humidity_alert(self) -> ToggledSetting:
+        """Return the humidity percentage that triggers a water-sensor alert."""
+        return ToggledSetting.parse(self.raw.get("waterSensorHumidityAlertLimit"))
 
     @property
-    def sensor_humidity_shutoff_percent(self) -> float | None:
-        """Return the humidity that triggers an automatic shutoff."""
-        return _as_enabled_float(self.raw.get("waterSensorHumidityShutoffLimit"))
+    def sensor_humidity_shutoff(self) -> ToggledSetting:
+        """Return the humidity percentage that triggers an automatic shutoff."""
+        return ToggledSetting.parse(self.raw.get("waterSensorHumidityShutoffLimit"))
 
     @property
-    def sensor_temp_alert_f(self) -> float | None:
+    def sensor_temp_alert(self) -> ToggledSetting:
         """Return the water-sensor temperature that triggers an alert."""
-        return _as_enabled_float(self.raw.get("waterSensorTemperatureAlertLimit"))
+        return ToggledSetting.parse(self.raw.get("waterSensorTemperatureAlertLimit"))
 
     @property
-    def sensor_temp_shutoff_f(self) -> float | None:
+    def sensor_temp_shutoff(self) -> ToggledSetting:
         """Return the water-sensor temperature that triggers a shutoff."""
-        return _as_enabled_float(self.raw.get("waterSensorTemperatureShutoffLimit"))
+        return ToggledSetting.parse(self.raw.get("waterSensorTemperatureShutoffLimit"))
 
     @property
     def current_flow_limit_minutes(self) -> float | None:
