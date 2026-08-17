@@ -659,3 +659,32 @@ class TestShutoffReasonAndProblem:
     def test_every_warning_and_critical_flag_can_be_reported(self):
         for flag in (*WARNING_FLAGS, *CRITICAL_FLAGS):
             assert valve(mode=int(flag)).problem is flag, flag
+
+
+class TestUnknownCauses:
+    """What the library says when FloLogic says something it does not define."""
+
+    def test_a_closed_valve_with_an_unmapped_bit_is_not_called_manual(self):
+        # The dangerous failure: a cause carried on a bit this library does
+        # not know would leave automatic_shutoff_flags empty, and the absence
+        # of a cause is exactly what MANUAL infers from. Reporting a leak as
+        # a deliberate shutoff is worse than admitting ignorance.
+        subject = valve(mode=int(ValveMode.SHUTOFF) | (1 << 27))
+        assert subject.mode.unknown_bits == 1 << 27
+        assert subject.shutoff_reason is ShutoffReason.UNKNOWN
+
+    def test_a_clean_manual_shutoff_is_still_manual(self):
+        subject = valve(mode=int(ValveMode.SHUTOFF))
+        assert subject.mode.unknown_bits == 0
+        assert subject.shutoff_reason is ShutoffReason.MANUAL
+
+    def test_a_known_cause_wins_over_an_unmapped_bit(self):
+        # We know why this one closed, so ignorance elsewhere does not matter.
+        subject = valve(mode=ValveMode.SHUTOFF | ValveMode.SENSOR_LEAK | (1 << 27))
+        assert subject.shutoff_reason is ShutoffReason.SENSOR_LEAK
+
+    def test_recognised_bits_alongside_a_shutoff_do_not_trigger_unknown(self):
+        # AC_LOST is mapped and is not a shutoff cause; it is not ignorance.
+        subject = valve(mode=ValveMode.SHUTOFF | ValveMode.AC_LOST)
+        assert subject.shutoff_reason is ShutoffReason.MANUAL
+        assert subject.problem is ValveMode.AC_LOST

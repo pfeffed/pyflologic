@@ -278,6 +278,7 @@ class ShutoffReason(StrEnum):
     """
 
     MANUAL = "manual"
+    UNKNOWN = "unknown"
     SENSOR_LEAK = "sensor_leak"
     EXTERNAL_LEAK = "external_leak"
     FLOW_TIME_EXCEEDED = "flow_time_exceeded"

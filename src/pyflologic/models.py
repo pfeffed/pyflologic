@@ -422,6 +422,12 @@ class Valve:
         not visible in a single bit -- an automatic trip sets ``SHUTOFF``
         alongside its cause -- so it is the *absence* of any cause that makes
         a shutoff manual.
+
+        Which is why a closed valve carrying bits this library does not
+        recognise reports ``UNKNOWN`` rather than ``MANUAL``. The inference
+        behind ``MANUAL`` is "no cause is present", and an unmapped bit means
+        we cannot say that. Guessing there would describe a leak as a
+        deliberate shutoff.
         """
         automatic = self.automatic_shutoff_flags
         if automatic:
@@ -430,6 +436,8 @@ class Valve:
                     return ShutoffReason.from_flag(flag)
             return ShutoffReason.from_flag(automatic[0])
         if self.mode & ValveMode.SHUTOFF:
+            if self.mode.unknown_bits:
+                return ShutoffReason.UNKNOWN
             return ShutoffReason.MANUAL
         return None
 
