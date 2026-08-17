@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyflologic"
-version = "0.3.0"
+version = "0.2.1"
 description = "Async client for the FloLogic Connect leak-detection valve cloud service"
 readme = "README.md"
 license = { text = "MIT" }
