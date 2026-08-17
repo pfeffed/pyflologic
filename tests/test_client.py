@@ -703,3 +703,30 @@ class TestSilentlyIgnoredWrites:
             await client.async_send_command("valve-1", {"dripRate": 1.0}, timeout=2)
         # It was sent; the cloud simply ignored it, as it does.
         assert hub.invocations("RequestStateChange")
+
+
+class TestTemperatureOffset:
+    """Calibration offset for the temperature reading."""
+
+    async def test_it_maps_to_the_wire_field(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        await client.async_update_settings("valve-1", temperature_offset_f=3)
+        assert hub.valve("valve-1")["temperatureOffset"] == 3
+
+    async def test_a_negative_offset_is_a_value_not_a_switch(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """Unlike the sign-encoded settings, this one is genuinely signed.
+
+        A -2 offset means "read two degrees low", not "offset disabled".
+        """
+        await client.async_update_settings("valve-1", temperature_offset_f=-2)
+        assert hub.valve("valve-1")["temperatureOffset"] == -2
+        assert client.get_valve("valve-1").temperature_offset_f == -2
+
+    async def test_zero_is_a_real_value(self, client: FloLogicClient, hub: FakeHub):
+        hub.valve("valve-1")["temperatureOffset"] = 4
+        await client.async_refresh()
+        await client.async_update_settings("valve-1", temperature_offset_f=0)
+        assert hub.valve("valve-1")["temperatureOffset"] == 0

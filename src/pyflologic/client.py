@@ -98,6 +98,7 @@ _SETTING_FIELDS: dict[str, str] = {
     "low_temp_shutoff_f": "lowTemperatureLimit",
     "pre_alert_minutes": "preAlertNoticeInterval",
     "no_flow_notice_seconds": "noFlowNoticeInterval",
+    "temperature_offset_f": "temperatureOffset",
 }
 
 _TOGGLED_FIELDS: dict[ToggledSettingName, str] = {
@@ -551,6 +552,7 @@ class FloLogicClient:
         low_temp_shutoff_f: float | None = None,
         pre_alert_minutes: float | None = None,
         no_flow_notice_seconds: float | None = None,
+        temperature_offset_f: float | None = None,
         refresh: bool = False,
     ) -> None:
         """Change one or more of a valve's settings in a single command.
@@ -568,6 +570,7 @@ class FloLogicClient:
             "low_temp_shutoff_f": low_temp_shutoff_f,
             "pre_alert_minutes": pre_alert_minutes,
             "no_flow_notice_seconds": no_flow_notice_seconds,
+            "temperature_offset_f": temperature_offset_f,
         }
         fields = {
             _SETTING_FIELDS[name]: value
