@@ -424,7 +424,7 @@ class Valve:
         a shutoff manual.
 
         Which is why a closed valve carrying bits this library does not
-        recognise reports ``UNKNOWN`` rather than ``MANUAL``. The inference
+        recognise reports ``UNRECOGNIZED`` rather than ``MANUAL``. The inference
         behind ``MANUAL`` is "no cause is present", and an unmapped bit means
         we cannot say that. Guessing there would describe a leak as a
         deliberate shutoff.
@@ -437,7 +437,7 @@ class Valve:
             return ShutoffReason.from_flag(automatic[0])
         if self.mode & ValveMode.SHUTOFF:
             if self.mode.unknown_bits:
-                return ShutoffReason.UNKNOWN
+                return ShutoffReason.UNRECOGNIZED
             return ShutoffReason.MANUAL
         return None
 

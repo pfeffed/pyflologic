@@ -671,7 +671,16 @@ class TestUnknownCauses:
         # a deliberate shutoff is worse than admitting ignorance.
         subject = valve(mode=int(ValveMode.SHUTOFF) | (1 << 27))
         assert subject.mode.unknown_bits == 1 << 27
-        assert subject.shutoff_reason is ShutoffReason.UNKNOWN
+        assert subject.shutoff_reason is ShutoffReason.UNRECOGNIZED
+
+    def test_no_reason_collides_with_a_reserved_home_assistant_state(self):
+        """ "unknown" and "unavailable" mean "no data" to a consumer.
+
+        A reason using either word would be displayed as a broken sensor
+        rather than as the state it describes.
+        """
+        reserved = {"unknown", "unavailable", "none"}
+        assert not [r for r in ShutoffReason if r.value in reserved]
 
     def test_a_clean_manual_shutoff_is_still_manual(self):
         subject = valve(mode=int(ValveMode.SHUTOFF))
