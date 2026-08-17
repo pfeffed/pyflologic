@@ -7,12 +7,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from pyflologic import (
+    CRITICAL_FLAGS,
+    WARNING_FLAGS,
+    WATER_OFF_FLAGS,
     ControlMode,
     DeviceIdentity,
     FlowState,
     Notification,
     NotificationSetting,
     SchedulerEvent,
+    ShutoffReason,
     ToggledSetting,
     Valve,
     ValveAccess,
@@ -550,3 +554,108 @@ class TestDeviceIdentity:
     def test_generate_uses_the_android_prefix(self):
         assert DeviceIdentity.generate("app").code.startswith("AND-")
         assert DeviceIdentity.generate("app").name == "app"
+
+
+class TestAutomaticShutoff:
+    """Telling "you closed it" apart from "it closed itself"."""
+
+    def test_a_manual_shutoff_is_not_automatic(self):
+        subject = valve(mode=int(ValveMode.SHUTOFF))
+        assert subject.active_water_off_flags == [ValveMode.SHUTOFF]
+        assert subject.automatic_shutoff_flags == []
+        assert subject.is_automatically_shut_off is False
+
+    def test_a_flow_limit_shutoff_is_automatic(self):
+        # The real capture: mode 40 is SHUTOFF | FLOW_TIME_EXCEEDED, so the
+        # SHUTOFF bit alone cannot distinguish the two cases.
+        subject = valve(mode=40)
+        assert subject.automatic_shutoff_flags == [ValveMode.FLOW_TIME_EXCEEDED]
+        assert subject.is_automatically_shut_off is True
+
+    def test_a_leak_shutoff_is_automatic(self):
+        subject = valve(mode=ValveMode.SHUTOFF | ValveMode.SENSOR_LEAK)
+        assert subject.automatic_shutoff_flags == [ValveMode.SENSOR_LEAK]
+        assert subject.is_automatically_shut_off is True
+
+    def test_an_open_valve_is_not_shut_off_at_all(self):
+        subject = valve(mode=int(ValveMode.HOME))
+        assert subject.active_water_off_flags == []
+        assert subject.is_automatically_shut_off is False
+
+
+class TestShutoffReasonAndProblem:
+    """State and reason kept apart, which is the point of having both."""
+
+    def test_an_open_valve_has_no_reason(self):
+        assert valve(mode=int(ValveMode.HOME)).shutoff_reason is None
+        assert valve(mode=int(ValveMode.AWAY)).shutoff_reason is None
+
+    def test_a_user_shutoff_reads_as_manual(self):
+        assert valve(mode=int(ValveMode.SHUTOFF)).shutoff_reason is ShutoffReason.MANUAL
+
+    def test_an_automatic_shutoff_names_what_it_reacted_to(self):
+        # The real capture. SHUTOFF is set too, and must not win.
+        assert valve(mode=40).shutoff_reason is ShutoffReason.FLOW_TIME_EXCEEDED
+
+    def test_a_leak_outranks_a_flow_limit(self):
+        subject = valve(
+            mode=ValveMode.SHUTOFF
+            | ValveMode.FLOW_TIME_EXCEEDED
+            | ValveMode.SENSOR_LEAK
+        )
+        assert subject.shutoff_reason is ShutoffReason.SENSOR_LEAK
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            ValveMode.SENSOR_LEAK,
+            ValveMode.EXTERNAL_LEAK,
+            ValveMode.FLOW_TIME_EXCEEDED,
+            ValveMode.LOW_TEMP_SHUTOFF,
+            ValveMode.HUMIDITY_SENSOR_SHUTOFF,
+            ValveMode.LOW_TEMP_SENSOR_SHUTOFF,
+            ValveMode.EXTERNAL_EMERGENCY_SHUTDOWN,
+        ],
+    )
+    def test_every_automatic_reason_is_reportable(self, flag):
+        """A cause with no mapping would silently report as manual.
+
+        That is the one wrong answer that matters here: a leak reported as
+        "you turned it off" is worse than reporting nothing at all.
+        """
+        reason = valve(mode=ValveMode.SHUTOFF | flag).shutoff_reason
+        assert reason is not None
+        assert reason is not ShutoffReason.MANUAL
+        assert reason is ShutoffReason.from_flag(flag)
+
+    def test_every_water_off_flag_maps_to_a_reason(self):
+        for flag in WATER_OFF_FLAGS:
+            if flag is ValveMode.SHUTOFF:
+                continue
+            assert ShutoffReason.from_flag(flag) is not None, flag
+
+    def test_a_healthy_valve_has_no_problem(self):
+        assert valve(mode=int(ValveMode.HOME)).problem is None
+
+    def test_a_problem_is_reported_while_the_valve_stays_open(self):
+        subject = valve(mode=ValveMode.HOME | ValveMode.CHANGE_BATTERY)
+        assert subject.problem is ValveMode.CHANGE_BATTERY
+        assert subject.shutoff_reason is None
+
+    def test_a_valve_failure_outranks_a_low_battery(self):
+        # A valve that cannot be trusted to close is worse news than a battery.
+        subject = valve(
+            mode=ValveMode.HOME | ValveMode.CHANGE_BATTERY | ValveMode.VALVE_FAILURE
+        )
+        assert subject.problem is ValveMode.VALVE_FAILURE
+
+    def test_a_shutoff_and_a_problem_coexist(self):
+        subject = valve(
+            mode=ValveMode.SHUTOFF | ValveMode.SENSOR_LEAK | ValveMode.AC_LOST
+        )
+        assert subject.shutoff_reason is ShutoffReason.SENSOR_LEAK
+        assert subject.problem is ValveMode.AC_LOST
+
+    def test_every_warning_and_critical_flag_can_be_reported(self):
+        for flag in (*WARNING_FLAGS, *CRITICAL_FLAGS):
+            assert valve(mode=int(flag)).problem is flag, flag

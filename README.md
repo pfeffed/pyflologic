@@ -161,9 +161,9 @@ the app shows an off toggle beside "18 hours".
 
 ```python
 setting = valve.auto_away
-setting.enabled     # False
+setting.enabled  # False
 setting.configured  # 18.0  -- kept even while off
-setting.effective   # None  -- the value to actually act on
+setting.effective  # None  -- the value to actually act on
 
 # Change one half; the other is read from the valve and preserved.
 await client.async_set_toggled_setting(valve_id, "auto_away", enabled=False)

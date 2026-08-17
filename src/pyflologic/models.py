@@ -18,12 +18,15 @@ from .const import DEVICE_CODE_PREFIX
 from .enums import (
     CRITICAL_FLAGS,
     FLOWING_STATES,
+    PROBLEM_PRIORITY,
+    SHUTOFF_REASON_PRIORITY,
     STATUS_PRIORITY,
     WARNING_FLAGS,
     WATER_OFF_FLAGS,
     ControlMode,
     FlowState,
     NotificationSetting,
+    ShutoffReason,
     ValveMode,
 )
 
@@ -386,6 +389,62 @@ class Valve:
     def active_water_off_flags(self) -> list[ValveMode]:
         """Return every set bit that means the valve has closed."""
         return [flag for flag in WATER_OFF_FLAGS if self.mode & flag]
+
+    @property
+    def automatic_shutoff_flags(self) -> list[ValveMode]:
+        """Return the water-off conditions the valve raised by itself.
+
+        The plain ``SHUTOFF`` bit is excluded because it means only "the valve
+        is closed", and it is set for a user's own command as well as
+        alongside every automatic trip -- a real flow-limit shutoff reports
+        ``SHUTOFF | FLOW_TIME_EXCEEDED``. What remains after removing it is
+        exactly the set of reasons the valve decided for itself, which is the
+        difference between "you turned the water off" and "something went
+        wrong". Only the latter deserves an alarm.
+        """
+        return [
+            flag
+            for flag in self.active_water_off_flags
+            if flag is not ValveMode.SHUTOFF
+        ]
+
+    @property
+    def is_automatically_shut_off(self) -> bool:
+        """Return whether the valve closed itself rather than being told to."""
+        return bool(self.automatic_shutoff_flags)
+
+    @property
+    def shutoff_reason(self) -> ShutoffReason | None:
+        """Return why the valve is closed, or ``None`` if it is open.
+
+        ``MANUAL`` means a person or an integration closed it; every other
+        value names what the valve reacted to on its own. The distinction is
+        not visible in a single bit -- an automatic trip sets ``SHUTOFF``
+        alongside its cause -- so it is the *absence* of any cause that makes
+        a shutoff manual.
+        """
+        automatic = self.automatic_shutoff_flags
+        if automatic:
+            for flag in SHUTOFF_REASON_PRIORITY:
+                if flag in automatic:
+                    return ShutoffReason.from_flag(flag)
+            return ShutoffReason.from_flag(automatic[0])
+        if self.mode & ValveMode.SHUTOFF:
+            return ShutoffReason.MANUAL
+        return None
+
+    @property
+    def problem(self) -> ValveMode | None:
+        """Return the most serious condition that is not closing the valve.
+
+        Deliberately separate from :attr:`shutoff_reason`: a low battery and a
+        leak are not the same kind of news, and flattening both into one
+        "problem" flag loses the only part a person would act on.
+        """
+        for flag in PROBLEM_PRIORITY:
+            if self.mode & flag:
+                return flag
+        return None
 
     @property
     def active_warning_flags(self) -> list[ValveMode]:

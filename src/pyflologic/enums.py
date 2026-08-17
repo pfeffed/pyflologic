@@ -14,12 +14,15 @@ from enum import KEEP, IntEnum, IntFlag, StrEnum
 __all__ = [
     "CONTROL_MODES",
     "CRITICAL_FLAGS",
+    "PROBLEM_PRIORITY",
+    "SHUTOFF_REASON_PRIORITY",
     "STATUS_PRIORITY",
     "WARNING_FLAGS",
     "WATER_OFF_FLAGS",
     "ControlMode",
     "FlowState",
     "NotificationSetting",
+    "ShutoffReason",
     "ToggledSettingName",
     "ValveMode",
 ]
@@ -225,6 +228,79 @@ reverse engineering and has not been checked against the app -- no valve has
 been observed faulted. Consumers that care about faults should read
 :data:`CRITICAL_FLAGS` rather than relying on this ranking.
 """
+
+
+PROBLEM_PRIORITY: tuple[ValveMode, ...] = (
+    ValveMode.VALVE_FAILURE,
+    ValveMode.ERROR,
+    ValveMode.SYSTEM_DOWN,
+    ValveMode.UNKNOWN_FAULT,
+    ValveMode.COMMUNICATION_ERROR,
+    ValveMode.LOW_TEMP_ALERT,
+    ValveMode.AC_LOST,
+    ValveMode.CHANGE_BATTERY,
+    ValveMode.UPDATING,
+)
+"""Conditions that need attention without closing the valve, worst first.
+
+A valve failure outranks everything: a valve that cannot be trusted to close
+is worse than any condition it might need to close for. Low temperature sits
+above the power and battery warnings because it is a countdown to burst pipes
+rather than a maintenance note.
+"""
+
+SHUTOFF_REASON_PRIORITY: tuple[ValveMode, ...] = (
+    ValveMode.SENSOR_LEAK,
+    ValveMode.EXTERNAL_LEAK,
+    ValveMode.FLOW_TIME_EXCEEDED,
+    ValveMode.EXTERNAL_EMERGENCY_SHUTDOWN,
+    ValveMode.LOW_TEMP_SHUTOFF,
+    ValveMode.LOW_TEMP_SENSOR_SHUTOFF,
+    ValveMode.HUMIDITY_SENSOR_SHUTOFF,
+)
+"""Why a closed valve closed itself, most specific first.
+
+Excludes the plain ``SHUTOFF`` bit, which is set both for a user's own command
+and alongside every automatic trip, so it says only "closed" and never why.
+"""
+
+
+class ShutoffReason(StrEnum):
+    """Why a valve is closed.
+
+    Deliberately *not* a :class:`ValveMode` bit. ``MANUAL`` has no bit on the
+    wire -- FloLogic expresses it as ``SHUTOFF`` with no accompanying cause --
+    and inventing one would be unsafe: a valve's mode integer is echoed back
+    to the cloud in every command, so a bit this library made up would
+    eventually be transmitted, and could collide with one FloLogic assigns
+    later. The wire format stays a faithful mirror; the interpretation lives
+    here.
+    """
+
+    MANUAL = "manual"
+    SENSOR_LEAK = "sensor_leak"
+    EXTERNAL_LEAK = "external_leak"
+    FLOW_TIME_EXCEEDED = "flow_time_exceeded"
+    EMERGENCY_SHUTDOWN = "emergency_shutdown"
+    LOW_TEMPERATURE = "low_temperature"
+    LOW_TEMPERATURE_SENSOR = "low_temperature_sensor"
+    HUMIDITY_SENSOR = "humidity_sensor"
+
+    @classmethod
+    def from_flag(cls, flag: ValveMode) -> ShutoffReason | None:
+        """Return the reason a mode bit represents, if it is a shutoff cause."""
+        return _SHUTOFF_REASON_FLAGS.get(flag)
+
+
+_SHUTOFF_REASON_FLAGS: dict[ValveMode, ShutoffReason] = {
+    ValveMode.SENSOR_LEAK: ShutoffReason.SENSOR_LEAK,
+    ValveMode.EXTERNAL_LEAK: ShutoffReason.EXTERNAL_LEAK,
+    ValveMode.FLOW_TIME_EXCEEDED: ShutoffReason.FLOW_TIME_EXCEEDED,
+    ValveMode.EXTERNAL_EMERGENCY_SHUTDOWN: ShutoffReason.EMERGENCY_SHUTDOWN,
+    ValveMode.LOW_TEMP_SHUTOFF: ShutoffReason.LOW_TEMPERATURE,
+    ValveMode.LOW_TEMP_SENSOR_SHUTOFF: ShutoffReason.LOW_TEMPERATURE_SENSOR,
+    ValveMode.HUMIDITY_SENSOR_SHUTOFF: ShutoffReason.HUMIDITY_SENSOR,
+}
 
 
 class FlowState(IntEnum):

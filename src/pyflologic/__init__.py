@@ -30,11 +30,14 @@ from .const import (
 )
 from .enums import (
     CRITICAL_FLAGS,
+    PROBLEM_PRIORITY,
+    SHUTOFF_REASON_PRIORITY,
     WARNING_FLAGS,
     WATER_OFF_FLAGS,
     ControlMode,
     FlowState,
     NotificationSetting,
+    ShutoffReason,
     ToggledSettingName,
     ValveMode,
 )
@@ -58,7 +61,7 @@ from .models import (
     ValveAccess,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "CRITICAL_FLAGS",
@@ -66,6 +69,8 @@ __all__ = [
     "DEFAULT_POLL_INTERVAL",
     "DEFAULT_REQUEST_TIMEOUT",
     "MIN_POLL_INTERVAL",
+    "PROBLEM_PRIORITY",
+    "SHUTOFF_REASON_PRIORITY",
     "WARNING_FLAGS",
     "WATER_OFF_FLAGS",
     "Account",
@@ -83,6 +88,7 @@ __all__ = [
     "Notification",
     "NotificationSetting",
     "SchedulerEvent",
+    "ShutoffReason",
     "ToggledSetting",
     "ToggledSettingName",
     "UnknownValveError",
