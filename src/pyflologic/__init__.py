@@ -48,6 +48,7 @@ from .exceptions import (
     FloLogicError,
     FloLogicProtocolError,
     FloLogicTimeoutError,
+    FloLogicValidationError,
     UnknownValveError,
 )
 from .models import (
@@ -61,7 +62,7 @@ from .models import (
     ValveAccess,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = [
     "CRITICAL_FLAGS",
@@ -83,6 +84,7 @@ __all__ = [
     "FloLogicError",
     "FloLogicProtocolError",
     "FloLogicTimeoutError",
+    "FloLogicValidationError",
     "FlowState",
     "ListenerCallback",
     "Notification",

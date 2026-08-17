@@ -88,7 +88,7 @@ save({"name": device.name, "code": device.code, "token": device.token})
 | `mode` | Full `ValveMode` bitfield |
 | `control_mode` | The settable mode (`home`/`away`/`bypass`/`shutoff`/`disabled`) |
 | `status` | One headline status, most newsworthy bit wins |
-| `flow_state`, `is_water_flowing`, `current_flow_oz_per_min` | Flow |
+| `flow_state`, `is_water_flowing` | Flow. There is no flow *rate* — see below |
 | `temperature_f`, `battery_percent`, `signal_strength_dbm` | Telemetry |
 | `active_water_off_flags` / `active_warning_flags` / `active_critical_flags` | Grouped conditions |
 | `flow_started_at`, `flow_elapsed_seconds()`, `shutoff_countdown_seconds()` | Derived timing — see below |
@@ -123,6 +123,38 @@ if valve.is_in_pre_alert_window():
 Whether the *user* would actually be warned also depends on their notification
 preferences — fetch those with `async_refresh_accesses()` and check
 `access.wants(NotificationSetting.ADVANCE_SHUTOFF)`.
+
+### Flow sensitivity has a hidden constraint
+
+FloLogic requires the flow sensitivity to be at or above the *winter* flow
+sensitivity — winter mode is the higher sensitivity, so a lower normal
+threshold contradicts it. The problem is how it enforces this: a lower value
+is **accepted and silently discarded**. No error event, no rejection, the
+setting simply never changes, which is indistinguishable from a lost message
+and costs a full command timeout before failing with nothing useful to say.
+
+`async_update_settings()` refuses such a write immediately with a
+`FloLogicValidationError` naming both values.
+
+The rule binds one way only. Raising the *winter* sensitivity above the flow
+sensitivity is accepted — which is how a valve reaches a state where its flow
+sensitivity cannot be written at all, including to its current value. If a
+flow-sensitivity write is being ignored, lower the winter sensitivity first.
+
+The temperature thresholds have no such constraint: alert below shutoff, or
+shutoff above alert, are both accepted.
+
+### There is no flow rate
+
+FloLogic's `currentFlow` field looks like a measurement and is not one. It
+reports the valve's own `dripRate` — the flow *sensitivity setting* — while
+flow is sustained, and zero otherwise. Confirmed by changing the sensitivity on
+a running valve and watching the "reading" follow it, three times across two
+valves.
+
+So this library exposes no flow-rate property. `valve.raw["currentFlow"]` is
+still there if you want the field, but nothing derived from it means what its
+name suggests. Whether water is moving is `is_water_flowing`.
 
 **The countdown only works for long draws.** It matched the app to the second
 against a 99-minute limit, but the cloud reports flow with tens of seconds of

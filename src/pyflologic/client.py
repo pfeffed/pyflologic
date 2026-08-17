@@ -47,6 +47,7 @@ from .exceptions import (
     FloLogicConnectionError,
     FloLogicError,
     FloLogicProtocolError,
+    FloLogicValidationError,
     UnknownValveError,
 )
 from .models import (
@@ -73,7 +74,16 @@ after a long cloud outage is worse than one that keeps trying.
 ListenerCallback = Callable[[Account], None]
 
 _COMMAND_POLL_SECONDS = 0.25
-"""How often to check whether the valve has reported a commanded change."""
+"""How often to re-read the cached valve while waiting for a command."""
+
+_COMMAND_REFRESH_SECONDS = 5.0
+"""How often to ask the cloud directly while waiting for a command.
+
+The cached valve only advances when a push arrives, so waiting on it alone
+means a missed push costs the entire timeout. Asking directly on a short
+cycle bounds that to a few seconds -- measured against live hardware, the
+cloud reflects a setting change about seven seconds after the command.
+"""
 
 _NUMERIC_TOLERANCE = 1e-6
 """FloLogic returns 4 where 4.0 was sent; that is not a disagreement."""
@@ -566,7 +576,34 @@ class FloLogicClient:
         }
         if not fields:
             raise FloLogicError("no settings were supplied to update")
+        self._validate_settings(valve_id, fields)
         await self.async_send_command(valve_id, fields, refresh=refresh)
+
+    def _validate_settings(self, valve_id: str, fields: JsonDict) -> None:
+        """Refuse writes FloLogic accepts and then ignores.
+
+        Confirmed against live hardware: a flow sensitivity below the winter
+        flow sensitivity is discarded without any acknowledgement. Winter mode
+        is the *higher* sensitivity, so a lower normal threshold contradicts
+        it -- but the cloud says nothing, and the caller sees a command that
+        times out for no visible reason. The check only runs on the typed
+        settings API; `async_send_command` stays a raw escape hatch.
+
+        Note the rule binds in one direction only. Raising the winter
+        sensitivity above the flow sensitivity *is* accepted, which is how a
+        valve ends up unable to have its flow sensitivity written at all.
+        """
+        requested = fields.get("dripRate")
+        if requested is None:
+            return
+        winter = self.get_valve(valve_id).winter_flow_sensitivity.configured
+        if winter is None or requested >= winter:
+            return
+        raise FloLogicValidationError(
+            f"flow sensitivity {requested} is below the winter flow "
+            f"sensitivity {winter}; FloLogic ignores such a change without "
+            f"reporting it. Lower the winter flow sensitivity first."
+        )
 
     async def async_set_toggled_setting(
         self,
@@ -659,9 +696,19 @@ class FloLogicClient:
         updated valve, typically inside a second. So the valve's own state is
         the acknowledgement, which is the better thing to wait on anyway: it
         answers "did the valve do it" rather than "did the server accept it".
+
+        Pushes are not guaranteed, though, so this also asks the cloud on a
+        short cycle rather than trusting them for the whole timeout. Waiting
+        on the cache alone was observed reporting failure for commands that
+        had in fact landed: the push went missing, nothing else was consulted
+        until the timeout expired, and by then the single fallback read came
+        too late to matter.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        # Short timeouts still get several chances to ask.
+        interval = min(_COMMAND_REFRESH_SECONDS, max(timeout / 3, 0.5))
+        next_refresh = loop.time() + interval
         while loop.time() < deadline:
             await asyncio.sleep(_COMMAND_POLL_SECONDS)
             cached = self._valves.get(valve_id)
@@ -671,8 +718,12 @@ class FloLogicClient:
                 raise FloLogicCommandError(
                     f"FloLogic reported an error: {self._last_error}"
                 )
+            if loop.time() >= next_refresh:
+                next_refresh = loop.time() + interval
+                with suppress(FloLogicError):
+                    await self.async_refresh()
 
-        # No push arrived. Ask directly before deciding it failed.
+        # Out of time. One last direct read before calling it a failure.
         with suppress(FloLogicError):
             await self.async_refresh()
         cached = self._valves.get(valve_id)

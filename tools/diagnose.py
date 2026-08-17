@@ -118,7 +118,8 @@ def describe_valve(valve: Any) -> None:
     print(f"  status           : {valve.status}")
     print(f"  flow state       : {valve.flow_state}")
     print(f"  water flowing    : {valve.is_water_flowing}")
-    print(f"  current flow     : {valve.current_flow_oz_per_min} oz/min")
+    raw_flow = valve.raw.get("currentFlow")
+    print(f"  raw currentFlow  : {raw_flow}  (echoes dripRate, not a rate)")
     print(f"  temperature      : {valve.temperature_f} F")
     battery = f"{valve.battery_percent} %" if valve.battery_percent else "n/a"
     print(f"  battery          : {battery} (raw {valve.battery_level_raw})")

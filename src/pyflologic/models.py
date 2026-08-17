@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -192,6 +192,14 @@ class Valve:
 
     raw: JsonDict
 
+    # There is deliberately no ``current_flow`` here. The cloud's
+    # ``currentFlow`` field is not a measurement: it reports the valve's own
+    # ``dripRate`` while flow is sustained and zero otherwise, confirmed by
+    # changing the sensitivity on a running valve and watching the "reading"
+    # follow it. Exposing it under any name implying a rate would present a
+    # setting as a measurement; ``raw["currentFlow"]`` remains for anyone who
+    # wants the field itself.
+
     # --- identity -------------------------------------------------------
 
     @property
@@ -341,11 +349,6 @@ class Valve:
         """
         state = self.flow_state
         return self.is_online and state is not None and state in FLOWING_STATES
-
-    @property
-    def current_flow_oz_per_min(self) -> float | None:
-        """Return the instantaneous flow rate in ounces per minute."""
-        return _as_float(self.raw.get("currentFlow"))
 
     @property
     def temperature_f(self) -> float | None:
@@ -627,6 +630,26 @@ class Valve:
         if started_at is None:
             return None
         return max(0, int((_now(now) - started_at).total_seconds()))
+
+    @property
+    def shutoff_at(self) -> datetime | None:
+        """Return when FloLogic will close the valve for continuous flow.
+
+        An absolute instant rather than a countdown, and deliberately so: a
+        countdown is only true at the moment it is read, so a consumer either
+        rewrites it constantly or displays a stale number. This value does not
+        change while the flow continues, which lets a display count down from
+        it without anything being stored again.
+
+        ``None`` when water is not flowing or the active mode has no limit.
+        Carries the same caveat as the countdown: the cloud reports short
+        flows too late for this to appear during them.
+        """
+        started_at = self.flow_started_at
+        limit_minutes = self.current_flow_limit_minutes
+        if started_at is None or not limit_minutes or limit_minutes <= 0:
+            return None
+        return started_at + timedelta(minutes=limit_minutes)
 
     def shutoff_countdown_seconds(self, now: datetime | None = None) -> int | None:
         """Estimate seconds until FloLogic closes the valve for continuous flow.

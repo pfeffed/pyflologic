@@ -257,6 +257,13 @@ class FakeHub:
         for key, value in command.items():
             if key in ("active", "created", "userId", "valveId"):
                 continue
+            # The real cloud discards a flow sensitivity below the winter one
+            # without saying so. Accepting it here would hide the bug this
+            # models rather than reproduce it.
+            if key == "dripRate":
+                winter = abs(stored.get("winterModeTime") or 0)
+                if winter and value < winter:
+                    continue
             if stored.get(key) != value:
                 stored[key] = value
                 changed = True

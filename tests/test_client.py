@@ -15,6 +15,7 @@ from pyflologic import (
     FloLogicClient,
     FloLogicCommandError,
     FloLogicError,
+    FloLogicValidationError,
     NotificationSetting,
     ToggledSettingName,
     UnknownValveError,
@@ -593,3 +594,112 @@ class TestToggledSettings:
         # A name without a wire field would fail only when someone tried to
         # write it, which for a temperature shutoff is a bad time to find out.
         assert set(client_module._TOGGLED_FIELDS) == set(ToggledSettingName)
+
+
+class TestCommandConfirmation:
+    """Confirming a command must not depend on a push arriving."""
+
+    async def test_a_missing_push_is_caught_by_polling_not_by_the_timeout(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # Waiting on the cache alone made a landed command look like a failure:
+        # the push went missing and nothing else was consulted until the
+        # timeout expired. Confirmation should now cost seconds, not the
+        # whole budget.
+        hub.suppress_state_push = True
+        started = asyncio.get_running_loop().time()
+        await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=30)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert client.get_valve("valve-1").control_mode is ControlMode.AWAY
+        assert elapsed < 15, f"took {elapsed:.1f}s; should poll, not wait it out"
+
+    async def test_a_push_still_confirms_immediately(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """The fast path must not regress into waiting for a poll cycle."""
+        started = asyncio.get_running_loop().time()
+        await client.async_set_mode("valve-1", ControlMode.SHUTOFF, timeout=30)
+        assert asyncio.get_running_loop().time() - started < 3
+
+    async def test_consecutive_commands_to_one_valve(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """Restoring a setting right after changing it is the common case."""
+        await client.async_update_settings("valve-1", home_limit_minutes=45)
+        await client.async_update_settings("valve-1", home_limit_minutes=30)
+        assert hub.valve("valve-1")["homeIntervalTime"] == 30
+
+
+class TestSilentlyIgnoredWrites:
+    """FloLogic discards some writes without saying so.
+
+    Left to the cloud those are indistinguishable from a lost message: the
+    caller waits out the full command timeout and learns nothing about why.
+    """
+
+    async def test_a_flow_sensitivity_below_the_winter_one_is_refused(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.valve("valve-1")["winterModeTime"] = -4.0
+        hub.valve("valve-1")["dripRate"] = 5.0
+        await client.async_refresh()
+        with pytest.raises(FloLogicValidationError, match="winter flow sensitivity"):
+            await client.async_update_settings(
+                "valve-1", flow_sensitivity_oz_per_min=3.0
+            )
+        # Refused here, so nothing was sent.
+        assert not hub.invocations("RequestStateChange")
+
+    async def test_the_refusal_is_immediate(self, client: FloLogicClient, hub: FakeHub):
+        """The whole point: fail in milliseconds, not after a timeout."""
+        hub.valve("valve-1")["winterModeTime"] = -4.0
+        await client.async_refresh()
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(FloLogicValidationError):
+            await client.async_update_settings(
+                "valve-1", flow_sensitivity_oz_per_min=1.0
+            )
+        assert asyncio.get_running_loop().time() - started < 1
+
+    @pytest.mark.parametrize("value", [4.0, 4.5, 10.0])
+    async def test_a_value_at_or_above_the_winter_one_is_sent(
+        self, client: FloLogicClient, hub: FakeHub, value: float
+    ):
+        hub.valve("valve-1")["winterModeTime"] = -4.0
+        await client.async_refresh()
+        await client.async_update_settings("valve-1", flow_sensitivity_oz_per_min=value)
+        assert hub.valve("valve-1")["dripRate"] == value
+
+    async def test_no_winter_sensitivity_means_no_constraint(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.valve("valve-1")["winterModeTime"] = 0
+        await client.async_refresh()
+        await client.async_update_settings("valve-1", flow_sensitivity_oz_per_min=0.1)
+        assert hub.valve("valve-1")["dripRate"] == 0.1
+
+    async def test_raising_winter_above_the_flow_sensitivity_is_allowed(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """The rule binds one way only, and this library does not invent the other.
+
+        FloLogic accepts it, which is how a valve reaches a state where its
+        flow sensitivity can no longer be written at all.
+        """
+        hub.valve("valve-1")["dripRate"] = 3.0
+        await client.async_refresh()
+        await client.async_set_toggled_setting(
+            "valve-1", ToggledSettingName.WINTER_FLOW_SENSITIVITY, value=5.0
+        )
+        assert abs(hub.valve("valve-1")["winterModeTime"]) == 5.0
+
+    async def test_the_escape_hatch_stays_raw(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """async_send_command is for fields this library has not modeled."""
+        hub.valve("valve-1")["winterModeTime"] = -4.0
+        await client.async_refresh()
+        with pytest.raises(FloLogicCommandError):
+            await client.async_send_command("valve-1", {"dripRate": 1.0}, timeout=2)
+        # It was sent; the cloud simply ignored it, as it does.
+        assert hub.invocations("RequestStateChange")

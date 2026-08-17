@@ -34,7 +34,6 @@ def summarize(valve: Any) -> str:
         f"{valve.valve_id:<8} {valve.name[:26]:<26} "
         f"mode={int(valve.mode):<10} {','.join(valve.mode.flag_names) or '-':<24} "
         f"fs={valve.flow_state.name if valve.flow_state else '?':<12} "
-        f"flow={valve.current_flow_oz_per_min} "
         f"cd={valve.shutoff_countdown_seconds()}"
     )
 

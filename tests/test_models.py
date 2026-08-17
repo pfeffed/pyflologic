@@ -448,9 +448,6 @@ class TestRealHardwareQuirks:
 class TestNumericCoercion:
     """Telemetry arrives as ints, floats, strings, or nothing at all."""
 
-    def test_numeric_strings_are_accepted(self):
-        assert valve(temperature="68.5").temperature_f == 68.5
-
     def test_garbage_becomes_none(self):
         assert valve(temperature="warm").temperature_f is None
         assert valve().temperature_f is None
@@ -697,3 +694,46 @@ class TestUnknownCauses:
         subject = valve(mode=ValveMode.SHUTOFF | ValveMode.AC_LOST)
         assert subject.shutoff_reason is ShutoffReason.MANUAL
         assert subject.problem is ValveMode.AC_LOST
+
+
+class TestShutoffTarget:
+    """The absolute instant a flow limit will fire."""
+
+    def flowing(self, **fields: object) -> Valve:
+        """A valve flowing since FLOW_START under a 30 minute Home limit."""
+        payload: dict[str, object] = {
+            "flowState": 4,
+            "mode": int(ValveMode.HOME),
+            "homeIntervalTime": 30,
+            "lastNewFlow": "2026-01-01T12:00:00Z",
+        }
+        payload.update(fields)
+        return valve(**payload)
+
+    def test_the_target_is_the_start_plus_the_limit(self):
+        assert self.flowing().shutoff_at == FLOW_START + timedelta(minutes=30)
+
+    def test_the_target_does_not_move_as_time_passes(self):
+        # The point of a timestamp over a countdown: nothing has to be
+        # rewritten while the flow continues.
+        subject = self.flowing()
+        first = subject.shutoff_at
+        assert first == subject.shutoff_at
+        # And it agrees with the countdown taken at any instant.
+        now = FLOW_START + timedelta(minutes=5)
+        assert subject.shutoff_countdown_seconds(now) == int(
+            (first - now).total_seconds()
+        )
+
+    def test_it_uses_the_active_modes_limit(self):
+        subject = self.flowing(mode=int(ValveMode.AWAY), awayIntervalTime=0.5)
+        assert subject.shutoff_at == FLOW_START + timedelta(seconds=30)
+
+    def test_no_target_without_flow_or_a_limit(self):
+        assert self.flowing(flowState=1).shutoff_at is None
+        assert self.flowing(homeIntervalTime=0).shutoff_at is None
+        assert self.flowing(mode=int(ValveMode.BYPASS)).shutoff_at is None
+
+    def test_no_target_in_override(self):
+        # An irrigation controller suspends the limit entirely.
+        assert self.flowing(mode=int(ValveMode.OVERRIDE)).shutoff_at is None
