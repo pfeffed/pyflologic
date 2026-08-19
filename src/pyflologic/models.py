@@ -529,12 +529,20 @@ class Valve:
 
     @property
     def guest_mode_expires_at(self) -> datetime | None:
-        """Return when guest mode ends, or ``None`` if it has never been used.
+        """Return when guest mode ends, or ``None`` if it is not running.
 
         Observed to be the end of the local day it was switched on, regardless
-        of the flow limit configured alongside it. Not settable through this
-        field -- the cloud decides it.
+        of the flow limit configured alongside it. The cloud decides it; it is
+        not settable.
+
+        ``None`` once guest mode is switched off, even though the cloud keeps
+        the last expiry in the field. A stale value here is worse than no
+        value: consumers render a timestamp as a relative time, so yesterday's
+        expiry would announce that guest mode ends in an hour when it is not
+        running at all.
         """
+        if not self.guest_flow_limit.enabled:
+            return None
         return _as_datetime(self.raw.get("guestModeDuration"))
 
     @property

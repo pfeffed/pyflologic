@@ -763,6 +763,18 @@ class TestGuestMode:
         assert one.guest_flow_limit.configured != sixty.guest_flow_limit.configured
         assert one.guest_mode_expires_at == sixty.guest_mode_expires_at
 
+    def test_no_expiry_while_guest_mode_is_off(self):
+        """The cloud keeps the last expiry; reporting it would mislead.
+
+        A timestamp is rendered as a relative time, so a stale value would
+        announce that guest mode ends shortly when it is not running.
+        """
+        off = valve(guestModeTime=-60, guestModeDuration="2026-08-19T06:59:00")
+        assert off.guest_flow_limit.enabled is False
+        assert off.guest_mode_expires_at is None
+        # The raw field still holds it, for anyone who wants the history.
+        assert off.raw["guestModeDuration"] == "2026-08-19T06:59:00"
+
     def test_a_valve_that_never_used_guest_mode(self):
         assert valve().guest_mode_expires_at is None
         assert valve().guest_flow_limit.configured is None
