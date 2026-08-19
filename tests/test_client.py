@@ -730,3 +730,48 @@ class TestTemperatureOffset:
         await client.async_refresh()
         await client.async_update_settings("valve-1", temperature_offset_f=0)
         assert hub.valve("valve-1")["temperatureOffset"] == 0
+
+
+class TestCommandRetries:
+    """FloLogic sometimes accepts a command and does not apply it."""
+
+    async def test_a_dropped_command_is_resent(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # Observed twice on real hardware, on different fields, each time
+        # succeeding on a plain resend with no constraint to explain it.
+        hub.drop_commands = 1
+        await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=30)
+        assert hub.valve("valve-1")["mode"] == int(ValveMode.AWAY)
+        assert len(hub.invocations("RequestStateChange")) == 2
+
+    async def test_it_gives_up_rather_than_retrying_forever(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        hub.drop_commands = 99
+        with pytest.raises(FloLogicCommandError):
+            await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=30)
+        assert len(hub.invocations("RequestStateChange")) == 3
+
+    async def test_a_command_that_lands_first_time_is_not_resent(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        """Resending is safe because these are idempotent, not because it is free."""
+        await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=30)
+        assert len(hub.invocations("RequestStateChange")) == 1
+
+
+class TestCommandBudget:
+    """A timeout is a promise about how long the call may take."""
+
+    async def test_retries_do_not_multiply_the_timeout(
+        self, client: FloLogicClient, hub: FakeHub
+    ):
+        # Three attempts at the full timeout each would take three times as
+        # long as the caller allowed.
+        hub.drop_commands = 99
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(FloLogicCommandError):
+            await client.async_set_mode("valve-1", ControlMode.AWAY, timeout=6)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed < 9, f"took {elapsed:.1f}s against a 6s budget"

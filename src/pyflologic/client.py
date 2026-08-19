@@ -76,6 +76,18 @@ ListenerCallback = Callable[[Account], None]
 _COMMAND_POLL_SECONDS = 0.25
 """How often to re-read the cached valve while waiting for a command."""
 
+_COMMAND_ATTEMPTS = 3
+"""How many times to send a command before reporting it failed.
+
+FloLogic occasionally accepts a command and does not apply it, with no error
+of any kind -- observed twice, on different fields, each time succeeding on a
+plain resend. Every command this client sends is idempotent, setting a field
+to a value, so resending one that did land changes nothing.
+"""
+
+_MIN_ATTEMPT_SECONDS = 1.0
+"""Floor on a single attempt, so a tiny timeout still gets one real try."""
+
 _COMMAND_REFRESH_SECONDS = 5.0
 """How often to ask the cloud directly while waiting for a command.
 
@@ -679,14 +691,42 @@ class FloLogicClient:
             "valveId": valve.raw.get("id"),
             **fields,
         }
-        self._last_error = None
-        await connection.async_send(
-            METHOD_REQUEST_STATE_CHANGE, self._user.raw, valve.raw, command
-        )
-        if verify:
-            await self._async_await_command(valve_id, fields, timeout)
-        if refresh:
-            await self.async_refresh()
+        if not verify:
+            self._last_error = None
+            await connection.async_send(
+                METHOD_REQUEST_STATE_CHANGE, self._user.raw, valve.raw, command
+            )
+            return
+
+        # Retries share the caller's budget rather than multiplying it: a
+        # timeout is a promise about how long this call may take, and three
+        # attempts of that length would break it.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        share = max(timeout / _COMMAND_ATTEMPTS, _MIN_ATTEMPT_SECONDS)
+        last_error: FloLogicCommandError | None = None
+        for attempt in range(_COMMAND_ATTEMPTS):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            self._last_error = None
+            await connection.async_send(
+                METHOD_REQUEST_STATE_CHANGE, self._user.raw, valve.raw, command
+            )
+            try:
+                await self._async_await_command(valve_id, fields, min(share, remaining))
+            except FloLogicCommandError as err:
+                last_error = err
+                _LOGGER.debug(
+                    "FloLogic command %s not applied on attempt %s", fields, attempt + 1
+                )
+                continue
+            if refresh:
+                await self.async_refresh()
+            return
+
+        assert last_error is not None
+        raise last_error
 
     async def _async_await_command(
         self, valve_id: str, fields: JsonDict, timeout: float

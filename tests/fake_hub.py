@@ -99,6 +99,7 @@ class FakeHub:
         self.pings_received = 0
         self.url = ""  # filled in by the fixture once the server is up
         self.suppress_state_push = False  # simulate a lost acknowledgement
+        self.drop_commands = 0  # accept this many commands without applying them
         self.state_push_delay = 0.0
 
         self.app = web.Application()
@@ -251,6 +252,12 @@ class FakeHub:
         stored = next((valve for valve in self.valves if valve["id"] == valve_id), None)
         if stored is None:
             await self._send(socket, "ErrorOccured", "Unknown valve")
+            return
+
+        if self.drop_commands:
+            # The real cloud does this: accepted, acknowledged by silence,
+            # and simply not applied.
+            self.drop_commands -= 1
             return
 
         changed = False
