@@ -105,7 +105,7 @@ _TOGGLED_FIELDS: dict[ToggledSettingName, str] = {
     ToggledSettingName.AUTO_AWAY: "autoAwayTime",
     ToggledSettingName.DELAY_AWAY: "delayAwayIntervalTime",
     ToggledSettingName.WINTER_FLOW_SENSITIVITY: "winterModeTime",
-    ToggledSettingName.GUEST_MODE: "guestModeTime",
+    ToggledSettingName.GUEST_FLOW_LIMIT: "guestModeTime",
     ToggledSettingName.LOW_TEMP_ALERT: "lowTemperatureAlert",
     ToggledSettingName.LOW_TEMP_SHUTOFF: "lowTemperatureLimit",
 }

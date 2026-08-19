@@ -104,7 +104,7 @@ class ToggledSettingName(StrEnum):
     AUTO_AWAY = "auto_away"
     DELAY_AWAY = "delay_away"
     WINTER_FLOW_SENSITIVITY = "winter_flow_sensitivity"
-    GUEST_MODE = "guest_mode"
+    GUEST_FLOW_LIMIT = "guest_flow_limit"
     LOW_TEMP_ALERT = "low_temp_alert"
     LOW_TEMP_SHUTOFF = "low_temp_shutoff"
 
@@ -307,11 +307,25 @@ _SHUTOFF_REASON_FLAGS: dict[ValveMode, ShutoffReason] = {
 class FlowState(IntEnum):
     """Values FloLogic reports in a valve's ``flowState`` field.
 
-    ``NO_FLOW``, ``NEW_FLOW`` and ``FLOW`` are all confirmed against live
-    hardware. ``VALVE_CLOSED`` is not: a valve driven into SHUTOFF, watched
-    physically closing, reported ``NO_FLOW`` throughout. The value is carried
-    on inherited authority alone, so do not infer a closed valve from it --
-    read :attr:`~pyflologic.models.Valve.mode` for that.
+    ``NO_FLOW``, ``NEW_FLOW`` and ``FLOW`` are confirmed against live
+    hardware. ``VALVE_CLOSED`` does not occur on it.
+
+    That was tested twice, closing a valve against water actively moving
+    through it while capturing every push and polling every two seconds for
+    ninety seconds afterwards -- once from ``NEW_FLOW`` and once from
+    ``FLOW``, since interrupting flow the valve has promoted is the more
+    demanding case. Both went straight to ``NO_FLOW``, in 1.8 and 1.9 seconds,
+    with no intermediate state in 180 samples.
+
+    The value is kept because the cloud may use it on hardware not tested
+    here, but nothing should infer a closed valve from ``flowState``: a closed
+    valve looks exactly like an idle open one. Read
+    :attr:`~pyflologic.models.Valve.mode` for that.
+
+    Reaching ``FLOW`` takes several minutes of *uninterrupted* flow, timed
+    from ``lastNewFlow`` rather than from when a tap was opened -- closing the
+    valve restarts the clock, so a draw that has been stopped and resumed
+    counts from the resumption.
     """
 
     NO_FLOW = 1

@@ -737,3 +737,49 @@ class TestShutoffTarget:
     def test_no_target_in_override(self):
         # An irrigation controller suspends the limit entirely.
         assert self.flowing(mode=int(ValveMode.OVERRIDE)).shutoff_at is None
+
+
+class TestGuestMode:
+    """A field named for a duration that holds a flow limit."""
+
+    def test_the_value_is_a_flow_limit_not_a_span(self):
+        # Two real valves switched on together, carrying 1 and 60, expired at
+        # the same instant. A duration could not do that.
+        subject = valve(guestModeTime=60, guestModeDuration="2026-08-19T06:59:00")
+        assert subject.guest_flow_limit.enabled is True
+        assert subject.guest_flow_limit.configured == 60
+        assert subject.guest_mode_expires_at is not None
+
+    def test_the_sign_still_carries_the_switch(self):
+        subject = valve(guestModeTime=-99)
+        assert subject.guest_flow_limit.enabled is False
+        # Off, and the configured limit survives, as with every signed setting.
+        assert subject.guest_flow_limit.configured == 99
+
+    def test_the_expiry_is_independent_of_the_limit(self):
+        """Different limits, same expiry: the two are unrelated."""
+        one = valve(guestModeTime=1, guestModeDuration="2026-08-19T06:59:00")
+        sixty = valve(guestModeTime=60, guestModeDuration="2026-08-19T06:59:00")
+        assert one.guest_flow_limit.configured != sixty.guest_flow_limit.configured
+        assert one.guest_mode_expires_at == sixty.guest_mode_expires_at
+
+    def test_a_valve_that_never_used_guest_mode(self):
+        assert valve().guest_mode_expires_at is None
+        assert valve().guest_flow_limit.configured is None
+
+
+class TestValveClosedNeverOccurs:
+    """flowState 8 is not produced by this hardware."""
+
+    def test_a_closed_valve_reports_no_flow(self):
+        # Closing against actively running water produced NO_FLOW in 1.8
+        # seconds, with no intermediate state across ninety seconds of samples.
+        subject = valve(mode=int(ValveMode.SHUTOFF), flowState=1)
+        assert subject.flow_state is FlowState.NO_FLOW
+        assert subject.is_water_flowing is False
+        # Indistinguishable from an idle open valve on flowState alone.
+        idle = valve(mode=int(ValveMode.HOME), flowState=1)
+        assert idle.flow_state is subject.flow_state
+        # Only the mode tells them apart.
+        assert subject.shutoff_reason is not None
+        assert idle.shutoff_reason is None

@@ -514,9 +514,28 @@ class Valve:
         return ToggledSetting.parse(self.raw.get("winterModeTime"))
 
     @property
-    def guest_mode(self) -> ToggledSetting:
-        """Return Guest Mode and its configured duration."""
+    def guest_flow_limit(self) -> ToggledSetting:
+        """Return Guest Mode's flow limit, in minutes, and whether it is on.
+
+        ``guestModeTime`` is named as though it were a duration and is not.
+        Two valves switched on together, carrying 1 and 60, expired at the
+        same instant -- so the number is not a span. It is the flow limit that
+        applies while guest mode is active, in minutes like every other flow
+        limit on the device, which the app confirms by labelling it exactly
+        that. How long guest mode lasts is :attr:`guest_mode_expires_at`, and
+        is not something this field sets.
+        """
         return ToggledSetting.parse(self.raw.get("guestModeTime"))
+
+    @property
+    def guest_mode_expires_at(self) -> datetime | None:
+        """Return when guest mode ends, or ``None`` if it has never been used.
+
+        Observed to be the end of the local day it was switched on, regardless
+        of the flow limit configured alongside it. Not settable through this
+        field -- the cloud decides it.
+        """
+        return _as_datetime(self.raw.get("guestModeDuration"))
 
     @property
     def low_temp_alert(self) -> ToggledSetting:
