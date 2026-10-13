@@ -11,7 +11,12 @@ without ``--yes-change-my-valve`` and an explicit VID.
 For each change it records how long FloLogic took to accept the request and
 how long until the valve reported it, polling once a second -- the numbers
 the client's confirmation timeout is based on -- then restores the original
-value the same way. The original is restored even if the change fails.
+value the same way. The original is restored even if the change fails, and
+a restore that FloLogic accepts without applying is resent until it lands.
+
+Measured on 2026-10-13 against a WiFi Connect: a mode change was reported
+1.6-4.4 s after the request, a flow-sensitivity change 5 s after -- and one
+flow-sensitivity restore was accepted and never applied until resent.
 """
 
 from __future__ import annotations
@@ -118,7 +123,7 @@ async def run(args: argparse.Namespace) -> int:
             if args.what == "mode":
                 assert original.control_mode is not None
                 restore_mode = original.control_mode
-                await timed(
+                restored = await timed(
                     client,
                     args.vid,
                     f"-> {restore_mode.value}",
@@ -127,10 +132,14 @@ async def run(args: argparse.Namespace) -> int:
                     ),
                     lambda valve: mode_reflects(valve, restore_mode),
                 )
+                if not restored:
+                    await insist(
+                        client.async_set_mode(args.vid, restore_mode, timeout=TIMEOUT)
+                    )
             else:
                 restore_drip = original.flow_sensitivity_oz_per_min
                 assert restore_drip is not None
-                await timed(
+                restored = await timed(
                     client,
                     args.vid,
                     f"-> drip {restore_drip:g}",
@@ -139,7 +148,32 @@ async def run(args: argparse.Namespace) -> int:
                     ),
                     lambda valve: valve.flow_sensitivity_oz_per_min == restore_drip,
                 )
+                if not restored:
+                    await insist(
+                        client.async_set_flow_sensitivity(
+                            args.vid, restore_drip, timeout=TIMEOUT
+                        )
+                    )
     return 0 if ok else 1
+
+
+async def insist(command: Awaitable[None]) -> None:
+    """Restore with the library's own resending, after a timed attempt failed.
+
+    The timed attempts send once, to measure; a restore must not stop there.
+    FloLogic was observed accepting a restore and never applying it, which
+    left a valve at the test value until a resend went through.
+    """
+    print("  restore not applied; resending until it is", flush=True)
+    started = time.monotonic()
+    try:
+        await command
+    except FloLogicError as err:
+        print(f"  RESTORE FAILED: {err}. Set it back by hand.", flush=True)
+        return
+    print(
+        f"  restored after {time.monotonic() - started:.1f}s of resending", flush=True
+    )
 
 
 def main() -> int:
