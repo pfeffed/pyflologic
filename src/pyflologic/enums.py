@@ -134,6 +134,17 @@ class ValveMode(IntFlag, boundary=KEEP):
 _MODE_NAMES: dict[str, ValveMode] = {
     _normalize(member.name): member for member in ValveMode if member.name
 }
+# The member names above abbreviate where FloLogic's own enum likely spells
+# out; callbacks carry FloLogic's spelling. Unconfirmed until a callback shows
+# one, but harmless if FloLogic never sends them.
+_MODE_NAMES.update(
+    {
+        _normalize("LowTemperatureAlert"): ValveMode.LOW_TEMP_ALERT,
+        _normalize("LowTemperatureShutoff"): ValveMode.LOW_TEMP_SHUTOFF,
+        _normalize("LowTemperatureSensorShutoff"): ValveMode.LOW_TEMP_SENSOR_SHUTOFF,
+        _normalize("AcPowerLost"): ValveMode.AC_LOST,
+    }
+)
 
 
 class ControlMode(StrEnum):

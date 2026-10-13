@@ -19,6 +19,7 @@ from pyflologic import (
     UpdateTarget,
     ValveMode,
     build_callback_url,
+    callback_url_candidates,
     callback_url_from_request,
     compute_signature,
     parse_callback,
@@ -132,6 +133,17 @@ class TestVerifySignature:
                 SECRET, "u", timestamp=timestamp, signature=signature, now=NOW
             )
 
+    def test_a_fractional_timestamp_is_accepted(self):
+        url = "https://h/x"
+        stamp = f"{NOW}.5"
+        verify_signature(
+            SECRET,
+            url,
+            timestamp=stamp,
+            signature=compute_signature(SECRET, stamp, url),
+            now=NOW,
+        )
+
     def test_uppercase_hex_is_accepted(self):
         headers = signed("u")
         verify_signature(
@@ -179,6 +191,12 @@ class TestVerifyCallback:
         final, raw_query = deliver(AUTO_SHUTOFF)
         headers = {key.lower(): value for key, value in signed(final).items()}
         verify_callback(SECRET, REGISTERED, raw_query, headers, now=NOW)
+
+    def test_candidates_start_with_the_raw_reconstruction(self):
+        final, raw_query = deliver(AUTO_SHUTOFF)
+        candidates = callback_url_candidates(REGISTERED, raw_query)
+        assert candidates[0] == final
+        assert len(candidates) == len(set(candidates))
 
     def test_the_url_is_rebuilt_from_the_template_base(self):
         assert (

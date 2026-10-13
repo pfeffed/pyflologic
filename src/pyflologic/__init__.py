@@ -69,6 +69,7 @@ from .models import CallbackDefinition, CallbackEvent, Page, User, Valve
 from .webhook import (
     CALLBACK_VARIABLES,
     build_callback_url,
+    callback_url_candidates,
     callback_url_from_request,
     compute_signature,
     parse_callback,
@@ -127,6 +128,7 @@ __all__ = [
     "async_exchange_code",
     "build_authorize_url",
     "build_callback_url",
+    "callback_url_candidates",
     "callback_url_from_request",
     "compute_signature",
     "parse_callback",

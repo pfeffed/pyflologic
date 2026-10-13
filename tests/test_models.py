@@ -185,6 +185,11 @@ class TestEnums:
         mode, _ = ValveMode.from_names(" ShutOff , externalOverride ")
         assert mode == ValveMode.SHUTOFF | ValveMode.EXTERNAL_OVERRIDE
 
+    def test_spelled_out_names_are_aliases(self):
+        mode, unknown = ValveMode.from_names("Home,LowTemperatureAlert")
+        assert mode == ValveMode.HOME | ValveMode.LOW_TEMP_ALERT
+        assert unknown == []
+
     def test_unmapped_mode_names_are_kept(self):
         mode, unknown = ValveMode.from_names("Away,SomethingNew")
         assert mode == ValveMode.AWAY

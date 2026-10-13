@@ -38,6 +38,7 @@ from .models import CallbackEvent
 __all__ = [
     "CALLBACK_VARIABLES",
     "build_callback_url",
+    "callback_url_candidates",
     "callback_url_from_request",
     "compute_signature",
     "parse_callback",
@@ -98,7 +99,7 @@ def _check_timestamp(timestamp: str | None, now: float, tolerance: float) -> Non
     if not timestamp:
         raise FloLogicSignatureError(f"missing {HEADER_TIMESTAMP}")
     try:
-        sent = int(timestamp)
+        sent = float(timestamp)
     except ValueError:
         raise FloLogicSignatureError(f"malformed {HEADER_TIMESTAMP}") from None
     # Both directions: a timestamp from the future is as suspect as a stale
@@ -198,6 +199,21 @@ def _substituted_candidates(registered_url: str, raw_query: str) -> list[str]:
     return candidates
 
 
+def callback_url_candidates(registered_url: str, raw_query: str) -> list[str]:
+    """Return every URL :func:`verify_callback` will try, most likely first.
+
+    Exposed so a receiver can log them when a delivery fails to verify: the
+    one thing that diagnoses a mismatch is seeing what was reconstructed.
+    """
+    candidates = [callback_url_from_request(registered_url, raw_query)]
+    candidates += [
+        candidate
+        for candidate in _substituted_candidates(registered_url, raw_query)
+        if candidate not in candidates
+    ]
+    return candidates
+
+
 def _header(headers: Mapping[str, str], name: str) -> str | None:
     """Return a header value, matching the name case-insensitively."""
     if name in headers:
@@ -226,15 +242,9 @@ def verify_callback(
     signature is missing, stale or wrong -- nothing is decoded before that
     check passes.
     """
-    candidates = [callback_url_from_request(registered_url, raw_query)]
-    candidates += [
-        candidate
-        for candidate in _substituted_candidates(registered_url, raw_query)
-        if candidate not in candidates
-    ]
     verify_signature(
         secret,
-        candidates,
+        callback_url_candidates(registered_url, raw_query),
         timestamp=_header(headers, HEADER_TIMESTAMP),
         signature=_header(headers, HEADER_SIGNATURE),
         now=now,
