@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+
+# Local capture artifacts: raw payloads carry the valves' street addresses and
+# the account holders' names and email addresses.
+*.snapshot.json
+captures/
